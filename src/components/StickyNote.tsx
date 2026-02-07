@@ -6,13 +6,17 @@ import Window from "./Window";
 interface StickyNoteProps {
   defaultContent?: string;
   defaultPosition?: { x: number; y: number };
+  zIndex?: number;
   onClose?: () => void;
+  onFocus?: () => void;
 }
 
 export function StickyNote({
   defaultContent = "",
   defaultPosition = { x: 150, y: 150 },
+  zIndex = 1,
   onClose,
+  onFocus,
 }: StickyNoteProps) {
   const [content, setContent] = useState(defaultContent);
 
@@ -21,7 +25,9 @@ export function StickyNote({
       title="Note"
       defaultPosition={defaultPosition}
       defaultSize={{ width: 200, height: 150 }}
+      zIndex={zIndex}
       onClose={onClose}
+      onFocus={onFocus}
     >
       <textarea
         value={content}

@@ -12,24 +12,36 @@ interface OpenWindow {
   id: string;
   type: WindowType;
   position: { x: number; y: number };
+  zIndex: number;
 }
 
 export function Desktop() {
   const [windows, setWindows] = useState<OpenWindow[]>([
-    { id: "identity-1", type: "identity", position: { x: 50, y: 60 } },
+    { id: "identity-1", type: "identity", position: { x: 50, y: 40 }, zIndex: 1 },
   ]);
+  const [topZIndex, setTopZIndex] = useState(1);
 
   const addWindow = (type: WindowType) => {
     const id = `${type}-${Date.now()}`;
-    const offset = windows.length * 30;
+    const offset = (windows.length % 5) * 30;
+    const newZ = topZIndex + 1;
+    setTopZIndex(newZ);
     setWindows([
       ...windows,
-      { id, type, position: { x: 100 + offset, y: 100 + offset } },
+      { id, type, position: { x: 120 + offset, y: 60 + offset }, zIndex: newZ },
     ]);
   };
 
   const closeWindow = (id: string) => {
     setWindows(windows.filter((w) => w.id !== id));
+  };
+
+  const focusWindow = (id: string) => {
+    const newZ = topZIndex + 1;
+    setTopZIndex(newZ);
+    setWindows(
+      windows.map((w) => (w.id === id ? { ...w, zIndex: newZ } : w))
+    );
   };
 
   const menus = [
@@ -95,7 +107,9 @@ export function Desktop() {
                   key={win.id}
                   identity={myIdentity}
                   defaultPosition={win.position}
+                  zIndex={win.zIndex}
                   onClose={() => closeWindow(win.id)}
+                  onFocus={() => focusWindow(win.id)}
                 />
               );
             case "note":
@@ -103,7 +117,9 @@ export function Desktop() {
                 <StickyNote
                   key={win.id}
                   defaultPosition={win.position}
+                  zIndex={win.zIndex}
                   onClose={() => closeWindow(win.id)}
+                  onFocus={() => focusWindow(win.id)}
                 />
               );
             case "about":
@@ -113,7 +129,9 @@ export function Desktop() {
                   title="About Bitfloor"
                   defaultPosition={win.position}
                   defaultSize={{ width: 280, height: 180 }}
+                  zIndex={win.zIndex}
                   onClose={() => closeWindow(win.id)}
+                  onFocus={() => focusWindow(win.id)}
                 >
                   <div className="text-center text-sm">
                     <div className="text-lg mb-2">BITFLOOR</div>
@@ -138,7 +156,9 @@ export function Desktop() {
                   title="Team Chat"
                   defaultPosition={win.position}
                   defaultSize={{ width: 300, height: 250 }}
+                  zIndex={win.zIndex}
                   onClose={() => closeWindow(win.id)}
+                  onFocus={() => focusWindow(win.id)}
                 >
                   <div className="flex flex-col h-full">
                     <div className="flex-1 text-xs space-y-2 mb-2">

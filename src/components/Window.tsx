@@ -8,6 +8,8 @@ interface WindowProps {
   defaultPosition?: { x: number; y: number };
   defaultSize?: { width: number; height: number };
   onClose?: () => void;
+  onFocus?: () => void;
+  zIndex?: number;
   className?: string;
 }
 
@@ -17,20 +19,23 @@ export function Window({
   defaultPosition = { x: 100, y: 100 },
   defaultSize = { width: 300, height: 200 },
   onClose,
+  onFocus,
+  zIndex = 1,
   className = "",
 }: WindowProps) {
   const [position, setPosition] = useState(defaultPosition);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const windowRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef({ mouseX: 0, mouseY: 0, winX: 0, winY: 0 });
 
   useEffect(() => {
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragStartRef.current.mouseX;
+      const deltaY = e.clientY - dragStartRef.current.mouseY;
       setPosition({
-        x: e.clientX - dragOffset.x,
-        y: e.clientY - dragOffset.y,
+        x: dragStartRef.current.winX + deltaX,
+        y: dragStartRef.current.winY + deltaY,
       });
     };
 
@@ -45,39 +50,43 @@ export function Window({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, dragOffset]);
+  }, [isDragging]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (windowRef.current) {
-      const rect = windowRef.current.getBoundingClientRect();
-      setDragOffset({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-      });
-      setIsDragging(true);
-    }
+    e.preventDefault();
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      winX: position.x,
+      winY: position.y,
+    };
+    setIsDragging(true);
+    onFocus?.();
+  };
+
+  const handleWindowClick = () => {
+    onFocus?.();
   };
 
   return (
     <div
-      ref={windowRef}
       className={`absolute ${className}`}
       style={{
         left: position.x,
         top: position.y,
         width: defaultSize.width,
+        zIndex,
       }}
+      onMouseDown={handleWindowClick}
     >
       {/* Shadow layer (offset down-right) */}
       <div
-        className="absolute bg-white/20"
+        className="absolute bg-white/30"
         style={{
-          left: 2,
-          top: 2,
-          right: -2,
-          bottom: -2,
+          left: 3,
+          top: 3,
           width: defaultSize.width,
-          height: defaultSize.height + 24, // account for title bar
+          height: defaultSize.height + 24,
         }}
       />
       
@@ -88,19 +97,22 @@ export function Window({
       >
         {/* Title bar */}
         <div
-          className="flex items-center justify-between border-b border-white px-2 py-1 cursor-move select-none"
+          className="flex items-center justify-between border-b border-white px-2 py-1 cursor-move select-none bg-white text-black"
           onMouseDown={handleMouseDown}
         >
           {/* Close button */}
           <button
-            onClick={onClose}
-            className="w-4 h-4 border border-white flex items-center justify-center text-xs hover:bg-white hover:text-black"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            className="w-4 h-4 border border-black flex items-center justify-center text-xs hover:bg-black hover:text-white"
           >
             ×
           </button>
           
           {/* Title */}
-          <span className="text-xs tracking-wider">{title}</span>
+          <span className="text-xs tracking-wider uppercase">{title}</span>
           
           {/* Spacer for symmetry */}
           <div className="w-4" />

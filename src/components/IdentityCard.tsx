@@ -15,7 +15,9 @@ interface IdentityCardProps {
   identity: Identity;
   avatarConfig?: AvatarConfig;
   defaultPosition?: { x: number; y: number };
+  zIndex?: number;
   onClose?: () => void;
+  onFocus?: () => void;
   onAvatarChange?: (config: AvatarConfig) => void;
 }
 
@@ -23,7 +25,9 @@ export function IdentityCard({
   identity,
   avatarConfig,
   defaultPosition = { x: 50, y: 80 },
+  zIndex = 1,
   onClose,
+  onFocus,
   onAvatarChange,
 }: IdentityCardProps) {
   const [config, setConfig] = useState<AvatarConfig | undefined>(avatarConfig);
@@ -39,7 +43,9 @@ export function IdentityCard({
       title="Identity"
       defaultPosition={defaultPosition}
       defaultSize={{ width: 220, height: 280 }}
+      zIndex={zIndex}
       onClose={onClose}
+      onFocus={onFocus}
     >
       <div className="flex flex-col items-center gap-3">
         {/* Avatar */}
