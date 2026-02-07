@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 
 const AVATAR_SIZE = 64;
+// basePath for sprites - matches next.config.ts
+const BASE_PATH = "/bitfloor";
 
 export default function IdentityCardApp() {
   const [config, setConfig] = useState<number[]>([0, 2, 3, 4, 8, 7, 7, 1]); // Start with Nimbus's face
@@ -18,10 +20,14 @@ export default function IdentityCardApp() {
 
   useEffect(() => {
     const img = new Image();
-    img.src = "/sprites/face.png";
+    img.src = `${BASE_PATH}/sprites/face.png`;
     img.onload = () => {
       spriteRef.current = img;
       setLoaded(true);
+    };
+    img.onerror = () => {
+      // Fallback for local dev without basePath
+      img.src = "/sprites/face.png";
     };
   }, []);
 

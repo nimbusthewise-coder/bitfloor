@@ -56,7 +56,7 @@ export function AvatarGenerator({
   // Load sprite sheet
   useEffect(() => {
     const img = new Image();
-    img.src = "/sprites/face.png";
+    img.src = "/bitfloor/sprites/face.png";
     img.onload = () => {
       spriteRef.current = img;
       setLoaded(true);
