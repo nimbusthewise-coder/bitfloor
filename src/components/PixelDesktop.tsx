@@ -135,15 +135,35 @@ function PixelWindow({
       onMouseLeave={handleMouseUp}
       onClick={onFocus}
     >
-      {/* Shadow */}
+      {/* Layered depth shadow - multiple offset layers */}
       <div
         style={{
           position: "absolute",
-          left: UNIT / 2,
-          top: UNIT / 2,
+          left: 3,
+          top: 3,
+          width: width,
+          height: height + titleBarHeight,
+          background: "#222",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: 2,
+          top: 2,
           width: width,
           height: height + titleBarHeight,
           background: "#444",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: 1,
+          top: 1,
+          width: width,
+          height: height + titleBarHeight,
+          background: "#666",
         }}
       />
 
@@ -165,43 +185,43 @@ function PixelWindow({
             color: "#000",
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
             padding: `0 ${UNIT / 2}px`,
             cursor: "move",
-            borderBottom: "1px solid #fff",
+            borderBottom: "1px solid #000",
+            gap: UNIT,
           }}
           onMouseDown={handleMouseDown}
         >
-          {/* Close button */}
+          {/* Close button - classic Mac style box */}
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose();
             }}
             style={{
-              width: UNIT + 4,
-              height: UNIT + 4,
+              width: 12,
+              height: 12,
               border: "1px solid #000",
               background: "#fff",
-              color: "#000",
-              fontSize: "10px",
-              lineHeight: 1,
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              flexShrink: 0,
             }}
-          >
-            ×
-          </button>
+          />
 
-          {/* Title */}
-          <span style={{ fontSize: "8px", textTransform: "uppercase", letterSpacing: "1px" }}>
+          {/* Title - centered */}
+          <span style={{ 
+            flex: 1, 
+            textAlign: "center",
+            fontSize: "8px", 
+            textTransform: "uppercase", 
+            letterSpacing: "1px",
+            fontFamily: "inherit",
+          }}>
             {title}
           </span>
 
-          {/* Spacer */}
-          <div style={{ width: UNIT + 4 }} />
+          {/* Spacer for symmetry */}
+          <div style={{ width: 12, flexShrink: 0 }} />
         </div>
 
         {/* Content */}
@@ -220,7 +240,7 @@ function PixelWindow({
 }
 
 // Main desktop
-type WinType = "identity" | "note" | "about";
+type WinType = "identity" | "note" | "about" | "chat";
 
 interface Win {
   id: string;
@@ -309,16 +329,16 @@ export function PixelDesktop() {
       >
         <div style={{ display: "flex", gap: UNIT * 2 }}>
           <button
+            onClick={() => addWindow("chat")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            CHAT
+          </button>
+          <button
             onClick={() => addWindow("note")}
             style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
-            FILE
-          </button>
-          <button
-            onClick={() => addWindow("identity")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
-          >
-            VIEW
+            NOTE
           </button>
           <button
             onClick={() => addWindow("about")}
@@ -433,11 +453,43 @@ export function PixelDesktop() {
                 onDrag={(x, y) => moveWindow(win.id, x, y)}
               >
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: "12px", marginBottom: UNIT }}>BITFLOOR</div>
+                  <div style={{ fontSize: "10px", marginBottom: UNIT }}>BITFLOOR</div>
                   <div style={{ color: "#888", marginBottom: UNIT }}>v0.1.0</div>
-                  <div>A pixel-art digital office</div>
-                  <div>where humans and AI coexist.</div>
+                  <div>A pixel-art digital</div>
+                  <div>office where humans</div>
+                  <div>and AI coexist.</div>
                   <div style={{ color: "#888", marginTop: UNIT }}>bitfloor.ai</div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "chat") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Team Chat"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 28}
+                height={UNIT * 20}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                  <div style={{ flex: 1, borderBottom: "1px solid #444", marginBottom: UNIT / 2, paddingBottom: UNIT / 2, overflow: "auto" }}>
+                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>Nimbus:</span> Working on UI...</div>
+                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>JP:</span> Looks great!</div>
+                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>Nimbus:</span> Adding chat now</div>
+                  </div>
+                  <div style={{ 
+                    border: "1px solid #fff", 
+                    padding: "2px 4px",
+                    color: "#888",
+                  }}>
+                    Type here...
+                  </div>
                 </div>
               </PixelWindow>
             );
