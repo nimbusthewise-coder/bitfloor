@@ -220,7 +220,7 @@ function PixelWindow({
 }
 
 // Main desktop
-type WinType = "identity" | "note" | "about" | "chat" | "terminal" | "browser";
+type WinType = "identity" | "note" | "about" | "chat" | "terminal" | "browser" | "music" | "pixelart";
 
 interface Win {
   id: string;
@@ -256,6 +256,24 @@ export function PixelDesktop() {
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [terminalBooted, setTerminalBooted] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("bitfloor://home");
+  
+  // Music player state
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const [musicTrack, setMusicTrack] = useState(0);
+  const [cassetteAngle, setCassetteAngle] = useState(0);
+  const musicPlaylist = [
+    { title: "PIXEL DREAMS", artist: "Bitfloor FM", duration: "3:42" },
+    { title: "MIDNIGHT CODE", artist: "Nimbus", duration: "4:15" },
+    { title: "NEON RAIN", artist: "JP & The Agents", duration: "3:58" },
+    { title: "DIGITAL SUNSET", artist: "Bitfloor FM", duration: "5:21" },
+    { title: "RETRO FUTURE", artist: "The Cowboys", duration: "4:02" },
+  ];
+  
+  // Pixel art state
+  const [pixelCanvas, setPixelCanvas] = useState<number[][]>(() => 
+    Array(16).fill(null).map(() => Array(16).fill(0))
+  );
+  const [pixelColor, setPixelColor] = useState(1); // 0 = black, 1 = white
 
   // Clock
   useEffect(() => {
@@ -269,6 +287,15 @@ export function PixelDesktop() {
     const i = setInterval(update, 1000);
     return () => clearInterval(i);
   }, []);
+
+  // Cassette animation when playing
+  useEffect(() => {
+    if (!musicPlaying) return;
+    const interval = setInterval(() => {
+      setCassetteAngle(prev => (prev + 15) % 360);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [musicPlaying]);
 
   // Terminal boot sequence
   const bootTerminal = () => {
@@ -378,10 +405,16 @@ export function PixelDesktop() {
             CHAT
           </button>
           <button
-            onClick={() => addWindow("about")}
+            onClick={() => addWindow("music")}
             style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
-            ABOUT
+            MUSIC
+          </button>
+          <button
+            onClick={() => addWindow("pixelart")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            DRAW
           </button>
         </div>
         <div>{time}</div>
@@ -786,6 +819,240 @@ export function PixelDesktop() {
 ║                                      ║
 ╚══════════════════════════════════════╝`}
                     </pre>
+                  </div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "music") {
+            const track = musicPlaylist[musicTrack];
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Walkman"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 28}
+                height={UNIT * 30}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ textAlign: "center" }}>
+                  {/* Cassette tape visual */}
+                  <div style={{
+                    border: "2px solid #fff",
+                    padding: UNIT,
+                    marginBottom: UNIT,
+                    background: "#111",
+                  }}>
+                    <div style={{ 
+                      display: "flex", 
+                      justifyContent: "space-around",
+                      alignItems: "center",
+                      marginBottom: UNIT / 2,
+                    }}>
+                      {/* Left reel */}
+                      <div style={{
+                        width: 32,
+                        height: 32,
+                        border: "2px solid #fff",
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transform: `rotate(${cassetteAngle}deg)`,
+                      }}>
+                        <div style={{ 
+                          width: 8, 
+                          height: 8, 
+                          background: "#fff",
+                        }} />
+                      </div>
+                      {/* Right reel */}
+                      <div style={{
+                        width: 32,
+                        height: 32,
+                        border: "2px solid #fff",
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transform: `rotate(${cassetteAngle}deg)`,
+                      }}>
+                        <div style={{ 
+                          width: 8, 
+                          height: 8, 
+                          background: "#fff",
+                        }} />
+                      </div>
+                    </div>
+                    <div style={{ 
+                      height: 4, 
+                      background: musicPlaying ? "#fff" : "#444",
+                      margin: "0 16px",
+                    }} />
+                  </div>
+                  
+                  {/* Track info */}
+                  <div style={{ marginBottom: UNIT }}>
+                    <div style={{ fontSize: "8px", color: "#fff" }}>{track.title}</div>
+                    <div style={{ fontSize: "8px", color: "#888" }}>{track.artist}</div>
+                    <div style={{ fontSize: "8px", color: "#666" }}>{track.duration}</div>
+                  </div>
+                  
+                  {/* Controls */}
+                  <div style={{ display: "flex", justifyContent: "center", gap: UNIT }}>
+                    <button
+                      onClick={() => setMusicTrack((musicTrack - 1 + musicPlaylist.length) % musicPlaylist.length)}
+                      style={{ background: "none", border: "1px solid #fff", color: "#fff", padding: "4px 8px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px" }}
+                    >
+                      ◀◀
+                    </button>
+                    <button
+                      onClick={() => setMusicPlaying(!musicPlaying)}
+                      style={{ background: musicPlaying ? "#fff" : "none", border: "1px solid #fff", color: musicPlaying ? "#000" : "#fff", padding: "4px 12px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px" }}
+                    >
+                      {musicPlaying ? "■" : "▶"}
+                    </button>
+                    <button
+                      onClick={() => setMusicTrack((musicTrack + 1) % musicPlaylist.length)}
+                      style={{ background: "none", border: "1px solid #fff", color: "#fff", padding: "4px 8px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px" }}
+                    >
+                      ▶▶
+                    </button>
+                  </div>
+                  
+                  {/* Playlist */}
+                  <div style={{ 
+                    marginTop: UNIT, 
+                    borderTop: "1px solid #444", 
+                    paddingTop: UNIT / 2,
+                    maxHeight: UNIT * 8,
+                    overflow: "auto",
+                    textAlign: "left",
+                  }}>
+                    {musicPlaylist.map((t, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setMusicTrack(i); setMusicPlaying(true); }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          background: i === musicTrack ? "#333" : "none",
+                          border: "none",
+                          color: i === musicTrack ? "#fff" : "#888",
+                          fontFamily: "inherit",
+                          fontSize: "7px",
+                          padding: "2px 4px",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        {i + 1}. {t.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "pixelart") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Pixel Art"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 32}
+                height={UNIT * 30}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ display: "flex", gap: UNIT }}>
+                  {/* Canvas */}
+                  <div style={{ border: "1px solid #fff" }}>
+                    {pixelCanvas.map((row, y) => (
+                      <div key={y} style={{ display: "flex" }}>
+                        {row.map((cell, x) => (
+                          <div
+                            key={x}
+                            onClick={() => {
+                              const newCanvas = [...pixelCanvas];
+                              newCanvas[y] = [...newCanvas[y]];
+                              newCanvas[y][x] = pixelColor;
+                              setPixelCanvas(newCanvas);
+                            }}
+                            style={{
+                              width: 10,
+                              height: 10,
+                              background: cell ? "#fff" : "#000",
+                              cursor: "crosshair",
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Tools */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: UNIT / 2 }}>
+                    <div style={{ fontSize: "8px", color: "#888" }}>COLOR</div>
+                    <button
+                      onClick={() => setPixelColor(1)}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        background: "#fff",
+                        border: pixelColor === 1 ? "2px solid #0f0" : "1px solid #888",
+                        cursor: "pointer",
+                      }}
+                    />
+                    <button
+                      onClick={() => setPixelColor(0)}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        background: "#000",
+                        border: pixelColor === 0 ? "2px solid #0f0" : "1px solid #888",
+                        cursor: "pointer",
+                      }}
+                    />
+                    <div style={{ fontSize: "8px", color: "#888", marginTop: UNIT }}>TOOLS</div>
+                    <button
+                      onClick={() => setPixelCanvas(Array(16).fill(null).map(() => Array(16).fill(0)))}
+                      style={{
+                        background: "none",
+                        border: "1px solid #fff",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "7px",
+                        padding: "2px 4px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      CLEAR
+                    </button>
+                    <button
+                      onClick={() => {
+                        const newCanvas = pixelCanvas.map(row => [...row].reverse());
+                        setPixelCanvas(newCanvas);
+                      }}
+                      style={{
+                        background: "none",
+                        border: "1px solid #fff",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "7px",
+                        padding: "2px 4px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      FLIP H
+                    </button>
                   </div>
                 </div>
               </PixelWindow>
