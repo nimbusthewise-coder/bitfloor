@@ -220,7 +220,7 @@ function PixelWindow({
 }
 
 // Main desktop
-type WinType = "identity" | "note" | "about" | "chat";
+type WinType = "identity" | "note" | "about" | "chat" | "terminal" | "browser";
 
 interface Win {
   id: string;
@@ -243,9 +243,12 @@ export function PixelDesktop() {
     { from: "Nimbus", text: "Adding chat now" },
   ]);
   const [chatInput, setChatInput] = useState("");
+  const [terminalLines, setTerminalLines] = useState<string[]>([]);
+  const [terminalBooted, setTerminalBooted] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("bitfloor://home");
 
   // Clock
-  useState(() => {
+  useEffect(() => {
     const update = () => {
       const d = new Date();
       setTime(
@@ -255,7 +258,39 @@ export function PixelDesktop() {
     update();
     const i = setInterval(update, 1000);
     return () => clearInterval(i);
-  });
+  }, []);
+
+  // Terminal boot sequence
+  const bootTerminal = () => {
+    if (terminalBooted) return;
+    setTerminalBooted(true);
+    const bootSequence = [
+      "BITFLOOR OS v0.1.0",
+      "Copyright (c) 2026 Bitfloor Inc.",
+      "",
+      "Initializing system...",
+      "Loading kernel............ OK",
+      "Mounting filesystem....... OK",
+      "Starting services......... OK",
+      "Connecting to network..... OK",
+      "",
+      "Welcome to BITFLOOR",
+      "",
+      "Type 'help' for commands.",
+      "",
+      "> _",
+    ];
+    
+    let i = 0;
+    const interval = setInterval(() => {
+      if (i < bootSequence.length) {
+        setTerminalLines(prev => [...prev, bootSequence[i]]);
+        i++;
+      } else {
+        clearInterval(interval);
+      }
+    }, 150);
+  };
 
   const addWindow = (type: WinType) => {
     const newZ = topZ + 1;
@@ -315,16 +350,22 @@ export function PixelDesktop() {
       >
         <div style={{ display: "flex", gap: UNIT * 2 }}>
           <button
+            onClick={() => { addWindow("terminal"); bootTerminal(); }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            TERM
+          </button>
+          <button
+            onClick={() => addWindow("browser")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            WEB
+          </button>
+          <button
             onClick={() => addWindow("chat")}
             style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
             CHAT
-          </button>
-          <button
-            onClick={() => addWindow("note")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
-          >
-            NOTE
           </button>
           <button
             onClick={() => addWindow("about")}
@@ -572,6 +613,128 @@ export function PixelDesktop() {
                     }}
                     placeholder="Type here..."
                   />
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "terminal") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Terminal"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 40}
+                height={UNIT * 24}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div 
+                  style={{ 
+                    height: "100%", 
+                    overflow: "auto", 
+                    fontFamily: "inherit",
+                    fontSize: "8px",
+                    lineHeight: "1.5",
+                    color: "#0f0",
+                  }}
+                >
+                  {terminalLines.map((line, i) => (
+                    <div key={i}>{line || "\u00A0"}</div>
+                  ))}
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "browser") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Browser"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 50}
+                height={UNIT * 30}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                  {/* URL bar */}
+                  <div style={{ 
+                    display: "flex", 
+                    gap: 4, 
+                    marginBottom: UNIT / 2,
+                    paddingBottom: UNIT / 2,
+                    borderBottom: "1px solid #444",
+                  }}>
+                    <input
+                      type="text"
+                      value={browserUrl}
+                      onChange={(e) => setBrowserUrl(e.target.value)}
+                      style={{
+                        flex: 1,
+                        border: "1px solid #fff",
+                        padding: "2px 4px",
+                        background: "#000",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "8px",
+                        outline: "none",
+                      }}
+                    />
+                    <button
+                      style={{
+                        border: "1px solid #fff",
+                        padding: "2px 6px",
+                        background: "#000",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      GO
+                    </button>
+                  </div>
+                  {/* ASCII rendered page */}
+                  <div style={{ 
+                    flex: 1, 
+                    overflow: "auto",
+                    border: "1px solid #444",
+                    padding: UNIT / 2,
+                    fontFamily: "inherit",
+                    fontSize: "8px",
+                    lineHeight: "1.4",
+                  }}>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+{`╔══════════════════════════════════════╗
+║          WELCOME TO BITFLOOR         ║
+╠══════════════════════════════════════╣
+║                                      ║
+║  ┌────────────────────────────────┐  ║
+║  │     ░░░░░   BITFLOOR   ░░░░░  │  ║
+║  │                                │  ║
+║  │   A pixel-art digital office  │  ║
+║  │   where humans and AI agents  │  ║
+║  │         coexist.              │  ║
+║  │                                │  ║
+║  │   [ENTER]  [ABOUT]  [HELP]    │  ║
+║  └────────────────────────────────┘  ║
+║                                      ║
+║  ─────────────────────────────────   ║
+║                                      ║
+║  Latest News:                        ║
+║  • Desktop OS now live               ║
+║  • Chat system working               ║
+║  • Terminal added                    ║
+║                                      ║
+╚══════════════════════════════════════╝`}
+                    </pre>
+                  </div>
                 </div>
               </PixelWindow>
             );
