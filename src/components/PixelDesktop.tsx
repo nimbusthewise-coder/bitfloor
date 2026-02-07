@@ -237,11 +237,21 @@ export function PixelDesktop() {
   const [topZ, setTopZ] = useState(1);
   const [time, setTime] = useState("");
   const [avatarConfig, setAvatarConfig] = useState<number[]>(() => generateRandomFace());
-  const [chatMessages, setChatMessages] = useState([
-    { from: "Nimbus", text: "Working on UI..." },
-    { from: "JP", text: "Looks great!" },
-    { from: "Nimbus", text: "Adding chat now" },
-  ]);
+  const [chatChannel, setChatChannel] = useState("general");
+  const [chatMessages, setChatMessages] = useState<{[key: string]: {from: string; text: string}[]}>({
+    general: [
+      { from: "Nimbus", text: "Working on UI..." },
+      { from: "JP", text: "Looks great!" },
+      { from: "Nimbus", text: "Adding chat now" },
+    ],
+    random: [
+      { from: "System", text: "Welcome to #random" },
+    ],
+    dev: [
+      { from: "Nimbus", text: "Pushing new build..." },
+      { from: "System", text: "Build complete ✓" },
+    ],
+  });
   const [chatInput, setChatInput] = useState("");
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [terminalBooted, setTerminalBooted] = useState(false);
@@ -571,48 +581,90 @@ export function PixelDesktop() {
             );
           }
           if (win.type === "chat") {
+            const channels = ["general", "random", "dev"];
+            const currentMessages = chatMessages[chatChannel] || [];
             return (
               <PixelWindow
                 key={win.id}
                 title="Team Chat"
                 x={win.x}
                 y={win.y}
-                width={UNIT * 30}
-                height={UNIT * 22}
+                width={UNIT * 40}
+                height={UNIT * 26}
                 zIndex={win.z}
                 onClose={() => closeWindow(win.id)}
                 onFocus={() => focusWindow(win.id)}
                 onDrag={(x, y) => moveWindow(win.id, x, y)}
               >
-                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                  <div style={{ flex: 1, borderBottom: "1px solid #444", marginBottom: UNIT / 2, paddingBottom: UNIT / 2, overflow: "auto" }}>
-                    {chatMessages.map((msg, i) => (
-                      <div key={i} style={{ marginBottom: 4 }}>
-                        <span style={{ color: "#888" }}>{msg.from}:</span> {msg.text}
-                      </div>
+                <div style={{ display: "flex", height: "100%", gap: 4 }}>
+                  {/* Channel sidebar */}
+                  <div style={{ 
+                    width: UNIT * 10, 
+                    borderRight: "1px solid #444",
+                    paddingRight: 4,
+                    overflow: "auto",
+                  }}>
+                    <div style={{ color: "#888", marginBottom: 4 }}>CHANNELS</div>
+                    {channels.map(ch => (
+                      <button
+                        key={ch}
+                        onClick={() => setChatChannel(ch)}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          background: ch === chatChannel ? "#333" : "none",
+                          border: "none",
+                          color: ch === chatChannel ? "#fff" : "#888",
+                          fontFamily: "inherit",
+                          fontSize: "8px",
+                          padding: "2px 4px",
+                          cursor: "pointer",
+                          marginBottom: 2,
+                        }}
+                      >
+                        # {ch}
+                      </button>
                     ))}
+                    <div style={{ color: "#888", marginTop: UNIT, marginBottom: 4 }}>ONLINE</div>
+                    <div style={{ color: "#0f0", fontSize: "8px" }}>● Nimbus</div>
+                    <div style={{ color: "#0f0", fontSize: "8px" }}>● JP</div>
                   </div>
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && chatInput.trim()) {
-                        setChatMessages([...chatMessages, { from: "You", text: chatInput.trim() }]);
-                        setChatInput("");
-                      }
-                    }}
-                    style={{ 
-                      border: "1px solid #fff", 
-                      padding: "2px 4px",
-                      background: "#000",
-                      color: "#fff",
-                      fontFamily: "inherit",
-                      fontSize: "8px",
-                      outline: "none",
-                    }}
-                    placeholder="Type here..."
-                  />
+                  {/* Main chat area */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                    <div style={{ color: "#888", marginBottom: 4 }}># {chatChannel}</div>
+                    <div style={{ flex: 1, overflow: "auto", marginBottom: 4 }}>
+                      {currentMessages.map((msg, i) => (
+                        <div key={i} style={{ marginBottom: 4 }}>
+                          <span style={{ color: "#888" }}>{msg.from}:</span> {msg.text}
+                        </div>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && chatInput.trim()) {
+                          setChatMessages({
+                            ...chatMessages,
+                            [chatChannel]: [...currentMessages, { from: "You", text: chatInput.trim() }]
+                          });
+                          setChatInput("");
+                        }
+                      }}
+                      style={{ 
+                        border: "1px solid #fff", 
+                        padding: "2px 4px",
+                        background: "#000",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "8px",
+                        outline: "none",
+                      }}
+                      placeholder={`Message #${chatChannel}...`}
+                    />
+                  </div>
                 </div>
               </PixelWindow>
             );
