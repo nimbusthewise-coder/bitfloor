@@ -1,9 +1,75 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // Grid unit - all measurements are multiples of this
 const UNIT = 8;
+const AVATAR_SIZE = 64; // Native sprite size
+
+// Simple pixel avatar using canvas
+function PixelAvatar({ 
+  config, 
+  onClick 
+}: { 
+  config: number[]; 
+  onClick?: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const spriteRef = useRef<HTMLImageElement | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const img = new Image();
+    img.src = "/sprites/face.png";
+    img.onload = () => {
+      spriteRef.current = img;
+      setLoaded(true);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded || !canvasRef.current || !spriteRef.current) return;
+    const ctx = canvasRef.current.getContext("2d");
+    if (!ctx) return;
+
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, AVATAR_SIZE, AVATAR_SIZE);
+
+    // Draw each feature layer
+    for (let f = 1; f < 8; f++) {
+      const variantX = (config[f] || 0) * AVATAR_SIZE;
+      const featureY = f * AVATAR_SIZE;
+      ctx.drawImage(
+        spriteRef.current,
+        variantX, featureY, AVATAR_SIZE, AVATAR_SIZE,
+        0, 0, AVATAR_SIZE, AVATAR_SIZE
+      );
+    }
+  }, [config, loaded]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={AVATAR_SIZE}
+      height={AVATAR_SIZE}
+      onClick={onClick}
+      style={{
+        width: AVATAR_SIZE,
+        height: AVATAR_SIZE,
+        cursor: onClick ? "pointer" : "default",
+        imageRendering: "pixelated",
+      }}
+    />
+  );
+}
+
+function generateRandomFace(): number[] {
+  const face: number[] = [];
+  for (let f = 0; f < 8; f++) {
+    face.push(Math.floor(Math.random() * 10));
+  }
+  return face;
+}
 
 // Pixel-perfect window component
 interface PixelWindowProps {
@@ -170,6 +236,7 @@ export function PixelDesktop() {
   ]);
   const [topZ, setTopZ] = useState(1);
   const [time, setTime] = useState("");
+  const [avatarConfig, setAvatarConfig] = useState<number[]>(() => generateRandomFace());
 
   // Clock
   useState(() => {
@@ -223,7 +290,7 @@ export function PixelDesktop() {
         height: 360,
         background: "#000",
         position: "relative",
-        fontFamily: "monospace",
+        fontFamily: "'Press Start 2P', monospace",
         fontSize: "8px",
         color: "#fff",
         overflow: "hidden",
@@ -243,18 +310,19 @@ export function PixelDesktop() {
         <div style={{ display: "flex", gap: UNIT * 2 }}>
           <button
             onClick={() => addWindow("note")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
             FILE
           </button>
           <button
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+            onClick={() => addWindow("identity")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
-            EDIT
+            VIEW
           </button>
           <button
             onClick={() => addWindow("about")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
             ABOUT
           </button>
@@ -294,22 +362,25 @@ export function PixelDesktop() {
                 onDrag={(x, y) => moveWindow(win.id, x, y)}
               >
                 <div style={{ textAlign: "center" }}>
-                  {/* Avatar placeholder */}
+                  {/* Avatar */}
                   <div
                     style={{
-                      width: UNIT * 8,
-                      height: UNIT * 8,
                       border: "1px solid #fff",
                       margin: "0 auto",
                       marginBottom: UNIT,
+                      width: AVATAR_SIZE + 2,
+                      height: AVATAR_SIZE + 2,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                     }}
                   >
-                    :)
+                    <PixelAvatar 
+                      config={avatarConfig} 
+                      onClick={() => setAvatarConfig(generateRandomFace())}
+                    />
                   </div>
-                  <div style={{ fontSize: "10px", marginBottom: 2 }}>NIMBUS</div>
+                  <div style={{ fontSize: "8px", marginBottom: 2 }}>NIMBUS</div>
                   <div style={{ color: "#888", marginBottom: UNIT }}>Chief Strategist</div>
                   <div>● ACTIVE Lv.5</div>
                   <div

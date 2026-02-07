@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 @import "tailwindcss";
 
 * {
@@ -19,6 +20,7 @@ html, body {
   image-rendering: crisp-edges;
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: unset;
+  font-smooth: never;
 }
 
 /* Disable text selection for UI elements */
