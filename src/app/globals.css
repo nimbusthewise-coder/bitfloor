@@ -1,31 +1,56 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
 
 :root {
-  --background: #000000;
-  --foreground: #ffffff;
+  --bf-black: #000000;
+  --bf-white: #FFFFFF;
+  --bf-shadow-offset: 2px;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: var(--bf-black);
+  color: var(--bf-white);
+  font-family: 'Silkscreen', monospace;
+  font-size: 16px;
+  line-height: 1.4;
 }
 
 /* Pixel-perfect rendering */
-canvas,
-img {
+* {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
 
-/* 1-bit button style */
-button {
-  cursor: pointer;
-  transition: background-color 0.1s;
+/* Remove all anti-aliasing for that crisp 1-bit feel */
+* {
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  text-rendering: optimizeSpeed;
 }
 
-/* Remove default focus outline, add custom */
-button:focus {
-  outline: 2px solid white;
-  outline-offset: 2px;
+/* Selection style */
+::selection {
+  background: var(--bf-white);
+  color: var(--bf-black);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bf-black);
+  border: 1px solid var(--bf-white);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bf-white);
+}
+
+/* Base button reset */
+button {
+  font-family: inherit;
+  cursor: pointer;
 }
