@@ -22,17 +22,19 @@ export default function Home() {
               position: "absolute",
               top: 4,
               right: 8,
-              background: "none",
+              background: "#000",
               border: "1px solid #fff",
               color: "#fff",
               fontSize: "8px",
-              padding: "2px 6px",
+              padding: "8px 12px",
               cursor: "pointer",
               fontFamily: "'Press Start 2P', monospace",
               zIndex: 100,
+              minHeight: "32px",
+              touchAction: "manipulation",
             }}
           >
-            DESKTOP
+            ← DESKTOP
           </button>
         </div>
       )}

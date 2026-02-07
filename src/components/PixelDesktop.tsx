@@ -468,53 +468,53 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
           padding: `0 ${UNIT}px`,
         }}
       >
-        <div style={{ display: "flex", gap: UNIT * 2 }}>
+        <div style={{ display: "flex", gap: UNIT }}>
           <button
             onClick={() => { addWindow("terminal"); bootTerminal(); }}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             TERM
           </button>
           <button
             onClick={() => addWindow("browser")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             WEB
           </button>
           <button
             onClick={() => addWindow("chat")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             CHAT
           </button>
           <button
             onClick={() => addWindow("music")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             MUSIC
           </button>
           <button
             onClick={() => addWindow("pixelart")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             DRAW
           </button>
           <button
             onClick={() => addWindow("memory")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             MEM
           </button>
           <button
             onClick={() => addWindow("agent")}
-            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
           >
             AGENT
           </button>
           {onSwitchView && (
             <button
               onClick={onSwitchView}
-              style={{ background: "none", border: "none", color: "#0f0", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+              style={{ background: "none", border: "none", color: "#0f0", cursor: "pointer", fontSize: "8px", fontFamily: "inherit", padding: "4px 6px", minHeight: "24px", touchAction: "manipulation" }}
             >
               OFFICE
             </button>
