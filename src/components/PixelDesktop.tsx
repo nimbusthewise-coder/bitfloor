@@ -230,7 +230,11 @@ interface Win {
   z: number;
 }
 
-export function PixelDesktop() {
+interface PixelDesktopProps {
+  onSwitchView?: () => void;
+}
+
+export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
   const [windows, setWindows] = useState<Win[]>([
     { id: "identity-1", type: "identity", x: UNIT * 2, y: UNIT * 4, z: 1 },
   ]);
@@ -507,6 +511,14 @@ export function PixelDesktop() {
           >
             AGENT
           </button>
+          {onSwitchView && (
+            <button
+              onClick={onSwitchView}
+              style={{ background: "none", border: "none", color: "#0f0", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+            >
+              OFFICE
+            </button>
+          )}
         </div>
         <div>{time}</div>
       </div>
