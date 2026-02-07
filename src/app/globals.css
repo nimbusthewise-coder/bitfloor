@@ -1,56 +1,27 @@
-@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
 @import "tailwindcss";
 
-:root {
-  --bf-black: #000000;
-  --bf-white: #FFFFFF;
-  --bf-shadow-offset: 2px;
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
-body {
-  background: var(--bf-black);
-  color: var(--bf-white);
-  font-family: 'Silkscreen', monospace;
-  font-size: 16px;
-  line-height: 1.4;
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
 }
 
 /* Pixel-perfect rendering */
 * {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-}
-
-/* Remove all anti-aliasing for that crisp 1-bit feel */
-* {
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: unset;
-  text-rendering: optimizeSpeed;
 }
 
-/* Selection style */
-::selection {
-  background: var(--bf-white);
-  color: var(--bf-black);
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bf-black);
-  border: 1px solid var(--bf-white);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--bf-white);
-}
-
-/* Base button reset */
-button {
-  font-family: inherit;
-  cursor: pointer;
+/* Disable text selection for UI elements */
+button, [role="button"] {
+  user-select: none;
 }

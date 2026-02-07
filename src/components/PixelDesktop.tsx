@@ -1,0 +1,401 @@
+"use client";
+
+import { useState } from "react";
+
+// Grid unit - all measurements are multiples of this
+const UNIT = 8;
+
+// Pixel-perfect window component
+interface PixelWindowProps {
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  onClose: () => void;
+  onFocus: () => void;
+  onDrag: (x: number, y: number) => void;
+  children: React.ReactNode;
+}
+
+function PixelWindow({
+  title,
+  x,
+  y,
+  width,
+  height,
+  zIndex,
+  onClose,
+  onFocus,
+  onDrag,
+  children,
+}: PixelWindowProps) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onFocus();
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - x, y: e.clientY - y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    // Snap to grid
+    const newX = Math.round((e.clientX - dragStart.x) / UNIT) * UNIT;
+    const newY = Math.round((e.clientY - dragStart.y) / UNIT) * UNIT;
+    onDrag(Math.max(0, newX), Math.max(UNIT * 2, newY));
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const titleBarHeight = UNIT * 2; // 16px
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x,
+        top: y,
+        width: width,
+        zIndex,
+      }}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onClick={onFocus}
+    >
+      {/* Shadow */}
+      <div
+        style={{
+          position: "absolute",
+          left: UNIT / 2,
+          top: UNIT / 2,
+          width: width,
+          height: height + titleBarHeight,
+          background: "#444",
+        }}
+      />
+
+      {/* Window */}
+      <div
+        style={{
+          position: "relative",
+          width: width,
+          height: height + titleBarHeight,
+          background: "#000",
+          border: "1px solid #fff",
+        }}
+      >
+        {/* Title bar */}
+        <div
+          style={{
+            height: titleBarHeight,
+            background: "#fff",
+            color: "#000",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: `0 ${UNIT / 2}px`,
+            cursor: "move",
+            borderBottom: "1px solid #fff",
+          }}
+          onMouseDown={handleMouseDown}
+        >
+          {/* Close button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            style={{
+              width: UNIT + 4,
+              height: UNIT + 4,
+              border: "1px solid #000",
+              background: "#fff",
+              color: "#000",
+              fontSize: "10px",
+              lineHeight: 1,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            ×
+          </button>
+
+          {/* Title */}
+          <span style={{ fontSize: "8px", textTransform: "uppercase", letterSpacing: "1px" }}>
+            {title}
+          </span>
+
+          {/* Spacer */}
+          <div style={{ width: UNIT + 4 }} />
+        </div>
+
+        {/* Content */}
+        <div
+          style={{
+            height: height,
+            padding: UNIT / 2,
+            overflow: "hidden",
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Main desktop
+type WinType = "identity" | "note" | "about";
+
+interface Win {
+  id: string;
+  type: WinType;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export function PixelDesktop() {
+  const [windows, setWindows] = useState<Win[]>([
+    { id: "identity-1", type: "identity", x: UNIT * 2, y: UNIT * 4, z: 1 },
+  ]);
+  const [topZ, setTopZ] = useState(1);
+  const [time, setTime] = useState("");
+
+  // Clock
+  useState(() => {
+    const update = () => {
+      const d = new Date();
+      setTime(
+        d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+      );
+    };
+    update();
+    const i = setInterval(update, 1000);
+    return () => clearInterval(i);
+  });
+
+  const addWindow = (type: WinType) => {
+    const newZ = topZ + 1;
+    setTopZ(newZ);
+    const offset = (windows.length % 4) * UNIT * 2;
+    setWindows([
+      ...windows,
+      {
+        id: `${type}-${Date.now()}`,
+        type,
+        x: UNIT * 8 + offset,
+        y: UNIT * 6 + offset,
+        z: newZ,
+      },
+    ]);
+  };
+
+  const closeWindow = (id: string) => {
+    setWindows(windows.filter((w) => w.id !== id));
+  };
+
+  const focusWindow = (id: string) => {
+    const newZ = topZ + 1;
+    setTopZ(newZ);
+    setWindows(windows.map((w) => (w.id === id ? { ...w, z: newZ } : w)));
+  };
+
+  const moveWindow = (id: string, x: number, y: number) => {
+    setWindows(windows.map((w) => (w.id === id ? { ...w, x, y } : w)));
+  };
+
+  const menuBarHeight = UNIT * 2;
+
+  return (
+    <div
+      style={{
+        width: 640,
+        height: 360,
+        background: "#000",
+        position: "relative",
+        fontFamily: "monospace",
+        fontSize: "8px",
+        color: "#fff",
+        overflow: "hidden",
+      }}
+    >
+      {/* Menu bar */}
+      <div
+        style={{
+          height: menuBarHeight,
+          borderBottom: "1px solid #fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: `0 ${UNIT}px`,
+        }}
+      >
+        <div style={{ display: "flex", gap: UNIT * 2 }}>
+          <button
+            onClick={() => addWindow("note")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+          >
+            FILE
+          </button>
+          <button
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+          >
+            EDIT
+          </button>
+          <button
+            onClick={() => addWindow("about")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px" }}
+          >
+            ABOUT
+          </button>
+        </div>
+        <div>{time}</div>
+      </div>
+
+      {/* Desktop area */}
+      <div style={{ position: "relative", height: 360 - menuBarHeight }}>
+        {/* Grid pattern */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: 0.05,
+            backgroundImage: `
+              repeating-linear-gradient(0deg, #fff 0px, #fff 1px, transparent 1px, transparent ${UNIT}px),
+              repeating-linear-gradient(90deg, #fff 0px, #fff 1px, transparent 1px, transparent ${UNIT}px)
+            `,
+          }}
+        />
+
+        {/* Windows */}
+        {windows.map((win) => {
+          if (win.type === "identity") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Identity"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 20}
+                height={UNIT * 24}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ textAlign: "center" }}>
+                  {/* Avatar placeholder */}
+                  <div
+                    style={{
+                      width: UNIT * 8,
+                      height: UNIT * 8,
+                      border: "1px solid #fff",
+                      margin: "0 auto",
+                      marginBottom: UNIT,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    :)
+                  </div>
+                  <div style={{ fontSize: "10px", marginBottom: 2 }}>NIMBUS</div>
+                  <div style={{ color: "#888", marginBottom: UNIT }}>Chief Strategist</div>
+                  <div>● ACTIVE Lv.5</div>
+                  <div
+                    style={{
+                      borderTop: "1px solid #444",
+                      marginTop: UNIT,
+                      paddingTop: UNIT,
+                      display: "flex",
+                      justifyContent: "space-around",
+                    }}
+                  >
+                    <div>♡ 42</div>
+                    <div>◎ 1337</div>
+                    <div>⚡ 7</div>
+                  </div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "note") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Note"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 16}
+                height={UNIT * 12}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ color: "#888" }}>Type a note...</div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "about") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="About"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 24}
+                height={UNIT * 14}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: "12px", marginBottom: UNIT }}>BITFLOOR</div>
+                  <div style={{ color: "#888", marginBottom: UNIT }}>v0.1.0</div>
+                  <div>A pixel-art digital office</div>
+                  <div>where humans and AI coexist.</div>
+                  <div style={{ color: "#888", marginTop: UNIT }}>bitfloor.ai</div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          return null;
+        })}
+      </div>
+
+      {/* Status bar */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: menuBarHeight,
+          borderTop: "1px solid #444",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: `0 ${UNIT}px`,
+          color: "#888",
+        }}
+      >
+        <span>READY</span>
+        <span>{windows.length} WINDOW{windows.length !== 1 ? "S" : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+export default PixelDesktop;
