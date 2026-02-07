@@ -135,35 +135,15 @@ function PixelWindow({
       onMouseLeave={handleMouseUp}
       onClick={onFocus}
     >
-      {/* Layered depth shadow - multiple offset layers */}
+      {/* Layered depth shadow - offset creates depth illusion */}
       <div
         style={{
           position: "absolute",
-          left: 3,
-          top: 3,
+          left: 4,
+          top: 4,
           width: width,
           height: height + titleBarHeight,
-          background: "#222",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: 2,
-          top: 2,
-          width: width,
-          height: height + titleBarHeight,
-          background: "#444",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: 1,
-          top: 1,
-          width: width,
-          height: height + titleBarHeight,
-          background: "#666",
+          background: "#333",
         }}
       />
 
@@ -357,13 +337,79 @@ export function PixelDesktop() {
           style={{
             position: "absolute",
             inset: 0,
-            opacity: 0.05,
+            opacity: 0.03,
             backgroundImage: `
               repeating-linear-gradient(0deg, #fff 0px, #fff 1px, transparent 1px, transparent ${UNIT}px),
               repeating-linear-gradient(90deg, #fff 0px, #fff 1px, transparent 1px, transparent ${UNIT}px)
             `,
           }}
         />
+
+        {/* Desktop icons */}
+        <div 
+          style={{ 
+            position: "absolute", 
+            right: UNIT * 2, 
+            top: UNIT,
+            display: "flex",
+            flexDirection: "column",
+            gap: UNIT * 2,
+          }}
+        >
+          {/* Identity icon */}
+          <button
+            onClick={() => addWindow("identity")}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#fff",
+              cursor: "pointer",
+              textAlign: "center",
+              padding: 0,
+            }}
+          >
+            <div style={{
+              width: UNIT * 4,
+              height: UNIT * 4,
+              border: "1px solid #fff",
+              marginBottom: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "16px",
+            }}>
+              ☺
+            </div>
+            <div style={{ fontSize: "6px" }}>ME</div>
+          </button>
+
+          {/* Chat icon */}
+          <button
+            onClick={() => addWindow("chat")}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#fff",
+              cursor: "pointer",
+              textAlign: "center",
+              padding: 0,
+            }}
+          >
+            <div style={{
+              width: UNIT * 4,
+              height: UNIT * 4,
+              border: "1px solid #fff",
+              marginBottom: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "12px",
+            }}>
+              💬
+            </div>
+            <div style={{ fontSize: "6px" }}>CHAT</div>
+          </button>
+        </div>
 
         {/* Windows */}
         {windows.map((win) => {
