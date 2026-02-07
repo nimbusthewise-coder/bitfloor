@@ -365,6 +365,30 @@ export function OfficeWorld() {
     return () => clearInterval(interval);
   }, []);
 
+  // Thought pools for different character types
+  const agentThoughts = [
+    "Building UI...",
+    "Writing code...",
+    "Reviewing PR...",
+    "Debugging...",
+    "Refactoring...",
+    "Planning...",
+    "Testing...",
+    "Deploying...",
+    "Reading docs...",
+    "Thinking...",
+  ];
+  
+  const humanThoughts = [
+    "Reviewing code",
+    "In meeting",
+    "Coffee break",
+    "Planning sprint",
+    "Checking Slack",
+    "Writing spec",
+    "Reading email",
+  ];
+
   // Simple AI movement - characters occasionally move around
   useEffect(() => {
     const interval = setInterval(() => {
@@ -374,6 +398,13 @@ export function OfficeWorld() {
           const states: Character["state"][] = ["idle", "walking", "working"];
           const newState = states[Math.floor(Math.random() * states.length)];
           
+          // Pick a new thought when entering working state
+          let newThought = char.thought;
+          if (newState === "working") {
+            const thoughts = char.type === "agent" ? agentThoughts : humanThoughts;
+            newThought = thoughts[Math.floor(Math.random() * thoughts.length)];
+          }
+          
           if (newState === "walking") {
             // Pick a random nearby destination
             const newX = Math.max(5, Math.min(75, char.x + (Math.random() - 0.5) * 10));
@@ -381,12 +412,13 @@ export function OfficeWorld() {
             return {
               ...char,
               state: newState,
+              thought: newThought,
               direction: newX > char.x ? "right" : "left",
               targetX: Math.round(newX),
               targetY: Math.round(newY),
             };
           }
-          return { ...char, state: newState };
+          return { ...char, state: newState, thought: newThought };
         }
         
         // Move towards target if walking
