@@ -220,7 +220,7 @@ function PixelWindow({
 }
 
 // Main desktop
-type WinType = "identity" | "note" | "about" | "chat" | "terminal" | "browser" | "music" | "pixelart";
+type WinType = "identity" | "note" | "about" | "chat" | "terminal" | "browser" | "music" | "pixelart" | "memory" | "agent";
 
 interface Win {
   id: string;
@@ -274,6 +274,85 @@ export function PixelDesktop() {
     Array(16).fill(null).map(() => Array(16).fill(0))
   );
   const [pixelColor, setPixelColor] = useState(1); // 0 = black, 1 = white
+  
+  // Memory viewer state - fetches real data
+  const [memoryFile, setMemoryFile] = useState("MEMORY.md");
+  const [memoryFiles, setMemoryFiles] = useState([
+    { name: "MEMORY.md", label: "Long-term" },
+  ]);
+  const [memoryContent, setMemoryContent] = useState<string>("Loading...");
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryStats, setMemoryStats] = useState({ files: 0, age: "...", born: "..." });
+  
+  // Agent console state - fetches real status
+  const [agentStatus, setAgentStatus] = useState<"idle" | "thinking" | "working" | "offline">("idle");
+  const [agentTask, setAgentTask] = useState("Connecting...");
+  const [agentLog, setAgentLog] = useState<{time: string; action: string}[]>([]);
+  const [agentGateway, setAgentGateway] = useState("unknown");
+
+  // Fetch memory file list on mount
+  useEffect(() => {
+    fetch("/api/memory?file=_list")
+      .then(res => res.json())
+      .then(data => {
+        if (data.files) {
+          // Transform to display format
+          const files = data.files.map((f: any) => ({
+            name: f.name,
+            label: f.name === "MEMORY.md" ? "Long-term" : 
+                   f.name === "patterns.md" ? "Patterns" :
+                   f.name.replace(".md", ""),
+          }));
+          setMemoryFiles(files);
+          setMemoryStats({
+            files: files.length,
+            age: "6 days",
+            born: "2026-02-01",
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch memory content when file changes
+  useEffect(() => {
+    setMemoryLoading(true);
+    fetch(`/api/memory?file=${encodeURIComponent(memoryFile)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.content) {
+          setMemoryContent(data.content);
+        } else if (data.error) {
+          setMemoryContent(`Error: ${data.error}`);
+        }
+      })
+      .catch(err => setMemoryContent(`Failed to load: ${err.message}`))
+      .finally(() => setMemoryLoading(false));
+  }, [memoryFile]);
+
+  // Fetch agent status periodically
+  useEffect(() => {
+    const fetchAgentStatus = () => {
+      fetch("/api/agent")
+        .then(res => res.json())
+        .then(data => {
+          setAgentStatus(data.status || "offline");
+          setAgentTask(data.currentTask || "Unknown");
+          setAgentGateway(data.gateway || "unknown");
+          if (data.activityLog) {
+            setAgentLog(data.activityLog);
+          }
+        })
+        .catch(() => {
+          setAgentStatus("offline");
+          setAgentTask("Cannot reach Bitfloor server");
+        });
+    };
+
+    fetchAgentStatus();
+    const interval = setInterval(fetchAgentStatus, 10000); // Every 10 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   // Clock
   useEffect(() => {
@@ -415,6 +494,18 @@ export function PixelDesktop() {
             style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
           >
             DRAW
+          </button>
+          <button
+            onClick={() => addWindow("memory")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            MEM
+          </button>
+          <button
+            onClick={() => addWindow("agent")}
+            style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "8px", fontFamily: "inherit" }}
+          >
+            AGENT
           </button>
         </div>
         <div>{time}</div>
@@ -1052,6 +1143,221 @@ export function PixelDesktop() {
                       }}
                     >
                       FLIP H
+                    </button>
+                  </div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "memory") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Memory Viewer"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 50}
+                height={UNIT * 32}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ display: "flex", height: "100%", gap: 4 }}>
+                  {/* File sidebar */}
+                  <div style={{ 
+                    width: UNIT * 12, 
+                    borderRight: "1px solid #444",
+                    paddingRight: 4,
+                    overflow: "auto",
+                  }}>
+                    <div style={{ color: "#888", marginBottom: 4, fontSize: "7px" }}>MEMORY FILES</div>
+                    {memoryFiles.map(f => (
+                      <button
+                        key={f.name}
+                        onClick={() => setMemoryFile(f.name)}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          background: f.name === memoryFile ? "#333" : "none",
+                          border: "none",
+                          color: f.name === memoryFile ? "#fff" : "#888",
+                          fontFamily: "inherit",
+                          fontSize: "7px",
+                          padding: "2px 4px",
+                          cursor: "pointer",
+                          marginBottom: 2,
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                    <div style={{ 
+                      marginTop: UNIT, 
+                      paddingTop: UNIT / 2,
+                      borderTop: "1px solid #444",
+                    }}>
+                      <div style={{ color: "#888", fontSize: "7px", marginBottom: 4 }}>STATS</div>
+                      <div style={{ fontSize: "7px", color: "#666" }}>
+                        <div>Files: {memoryStats.files}</div>
+                        <div>Age: {memoryStats.age}</div>
+                        <div>Born: {memoryStats.born}</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Content viewer */}
+                  <div style={{ 
+                    flex: 1, 
+                    display: "flex", 
+                    flexDirection: "column",
+                  }}>
+                    <div style={{ 
+                      color: "#888", 
+                      marginBottom: 4, 
+                      fontSize: "7px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                    }}>
+                      <span>{memoryFile}</span>
+                      <span>{memoryLoading ? "LOADING..." : "READ-ONLY"}</span>
+                    </div>
+                    <div style={{ 
+                      flex: 1, 
+                      overflow: "auto",
+                      border: "1px solid #444",
+                      padding: 4,
+                      fontSize: "7px",
+                      lineHeight: "1.4",
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "inherit",
+                      color: memoryLoading ? "#666" : "#ccc",
+                    }}>
+                      {memoryContent}
+                    </div>
+                  </div>
+                </div>
+              </PixelWindow>
+            );
+          }
+          if (win.type === "agent") {
+            return (
+              <PixelWindow
+                key={win.id}
+                title="Agent Console"
+                x={win.x}
+                y={win.y}
+                width={UNIT * 44}
+                height={UNIT * 28}
+                zIndex={win.z}
+                onClose={() => closeWindow(win.id)}
+                onFocus={() => focusWindow(win.id)}
+                onDrag={(x, y) => moveWindow(win.id, x, y)}
+              >
+                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                  {/* Status header */}
+                  <div style={{ 
+                    display: "flex", 
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: UNIT,
+                    paddingBottom: UNIT / 2,
+                    borderBottom: "1px solid #444",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: agentStatus === "offline" ? "#f00" : 
+                                   agentStatus === "idle" ? "#888" : 
+                                   agentStatus === "thinking" ? "#ff0" : "#0f0",
+                        animation: agentStatus === "working" || agentStatus === "thinking" ? "pulse 1s infinite" : "none",
+                      }} />
+                      <span style={{ fontSize: "8px", textTransform: "uppercase" }}>
+                        {agentStatus === "offline" ? "OFFLINE" :
+                         agentStatus === "idle" ? "IDLE" : 
+                         agentStatus === "thinking" ? "THINKING..." : "WORKING"}
+                      </span>
+                    </div>
+                    <span style={{ 
+                      color: agentGateway === "online" ? "#0f0" : agentGateway === "offline" ? "#f00" : "#888", 
+                      fontSize: "7px" 
+                    }}>
+                      GW: {agentGateway.toUpperCase()}
+                    </span>
+                  </div>
+                  
+                  {/* Current task */}
+                  <div style={{ marginBottom: UNIT }}>
+                    <div style={{ color: "#888", fontSize: "7px", marginBottom: 2 }}>CURRENT TASK</div>
+                    <div style={{ 
+                      background: "#111",
+                      border: "1px solid #444",
+                      padding: "4px 6px",
+                      fontSize: "8px",
+                    }}>
+                      {agentTask || "No active task"}
+                    </div>
+                  </div>
+                  
+                  {/* Activity log */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                    <div style={{ color: "#888", fontSize: "7px", marginBottom: 2 }}>ACTIVITY LOG</div>
+                    <div style={{ 
+                      flex: 1,
+                      overflow: "auto",
+                      border: "1px solid #444",
+                      padding: 4,
+                      fontSize: "7px",
+                      fontFamily: "inherit",
+                    }}>
+                      {agentLog.map((entry, i) => (
+                        <div key={i} style={{ marginBottom: 2 }}>
+                          <span style={{ color: "#666" }}>[{entry.time}]</span>{" "}
+                          <span style={{ color: "#0f0" }}>{entry.action}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Controls */}
+                  <div style={{ 
+                    display: "flex", 
+                    gap: UNIT,
+                    marginTop: UNIT,
+                    paddingTop: UNIT / 2,
+                    borderTop: "1px solid #444",
+                  }}>
+                    <button
+                      onClick={() => setAgentStatus(agentStatus === "working" ? "idle" : "working")}
+                      style={{
+                        flex: 1,
+                        background: agentStatus === "working" ? "#fff" : "none",
+                        border: "1px solid #fff",
+                        color: agentStatus === "working" ? "#000" : "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "7px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {agentStatus === "working" ? "■ STOP" : "▶ START"}
+                    </button>
+                    <button
+                      onClick={() => setAgentLog([])}
+                      style={{
+                        background: "none",
+                        border: "1px solid #fff",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                        fontSize: "7px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      CLEAR LOG
                     </button>
                   </div>
                 </div>
