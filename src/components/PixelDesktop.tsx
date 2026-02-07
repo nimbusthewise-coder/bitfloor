@@ -240,7 +240,9 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
   ]);
   const [topZ, setTopZ] = useState(1);
   const [time, setTime] = useState("");
-  const [avatarConfig, setAvatarConfig] = useState<number[]>(() => generateRandomFace());
+  // Nimbus's chosen face DNA - selected 2026-02-07
+  const NIMBUS_FACE = [0, 2, 3, 4, 8, 7, 7, 1];
+  const [avatarConfig, setAvatarConfig] = useState<number[]>(NIMBUS_FACE);
   const [chatChannel, setChatChannel] = useState("general");
   const [chatMessages, setChatMessages] = useState<{[key: string]: {from: string; text: string}[]}>({
     general: [
