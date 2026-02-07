@@ -23,11 +23,12 @@ interface Character {
   targetY?: number;
   workstation?: string;
   color: string; // character accent color
+  thought?: string; // current thought/task
 }
 
 interface Furniture {
   id: string;
-  type: "desk" | "chair" | "plant" | "coffee" | "server" | "whiteboard" | "couch";
+  type: "desk" | "chair" | "plant" | "coffee" | "server" | "whiteboard" | "couch" | "computer";
   x: number;
   y: number;
   width: number;
@@ -88,8 +89,39 @@ function PixelCharacter({
         </div>
       ))}
       
-      {/* Status indicator for agents */}
-      {char.type === "agent" && char.state === "working" && (
+      {/* Thought bubble when working */}
+      {char.state === "working" && char.thought && (
+        <div style={{
+          position: "absolute",
+          top: -14,
+          left: 0,
+          fontSize: "5px",
+          color: "#000",
+          background: "#fff",
+          padding: "1px 3px",
+          borderRadius: 2,
+          whiteSpace: "nowrap",
+          maxWidth: 50,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}>
+          {char.thought}
+          {/* Thought bubble tail */}
+          <div style={{
+            position: "absolute",
+            bottom: -3,
+            left: 4,
+            width: 0,
+            height: 0,
+            borderLeft: "3px solid transparent",
+            borderRight: "3px solid transparent",
+            borderTop: "3px solid #fff",
+          }} />
+        </div>
+      )}
+      
+      {/* Status indicator dot for agents */}
+      {char.type === "agent" && (
         <div style={{
           position: "absolute",
           top: -4,
@@ -97,7 +129,7 @@ function PixelCharacter({
           transform: "translateX(-50%)",
           width: 3,
           height: 3,
-          background: "#0f0",
+          background: char.state === "working" ? "#0f0" : char.state === "walking" ? "#ff0" : "#888",
           borderRadius: "50%",
         }} />
       )}
@@ -114,7 +146,7 @@ function PixelCharacter({
           padding: "1px 2px",
           border: "1px solid #fff",
         }}>
-          ...
+          💬
         </div>
       )}
     </div>
@@ -194,9 +226,15 @@ function FurnitureItem({ item }: { item: Furniture }) {
                 width: "100%", 
                 height: 2, 
                 background: "#0f0",
-                opacity: 0.5 + Math.random() * 0.5,
+                animation: `blink ${0.5 + i * 0.3}s infinite alternate`,
               }} />
             ))}
+            <style>{`
+              @keyframes blink {
+                0% { opacity: 0.3; }
+                100% { opacity: 1; }
+              }
+            `}</style>
           </div>
         );
       case "whiteboard":
@@ -217,6 +255,31 @@ function FurnitureItem({ item }: { item: Furniture }) {
             background: "#333",
             borderRadius: 2,
           }} />
+        );
+      case "computer":
+        return (
+          <div style={{
+            width: item.width * TILE_SIZE,
+            height: item.height * TILE_SIZE,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+          }}>
+            {/* Monitor */}
+            <div style={{
+              width: 6,
+              height: 5,
+              border: "1px solid #666",
+              background: "#111",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}>
+              <div style={{ width: 2, height: 1, background: "#0f0" }} />
+            </div>
+            {/* Stand */}
+            <div style={{ width: 2, height: 2, background: "#444" }} />
+          </div>
         );
       default:
         return null;
@@ -240,9 +303,9 @@ function FurnitureItem({ item }: { item: Furniture }) {
 export function OfficeWorld() {
   // Characters in the office
   const [characters, setCharacters] = useState<Character[]>([
-    { id: "nimbus", name: "Nimbus", x: 20, y: 15, type: "agent", state: "working", direction: "right", color: "#0f0" },
-    { id: "jp", name: "JP", x: 35, y: 20, type: "human", state: "idle", direction: "left", color: "#fff" },
-    { id: "codex", name: "Codex", x: 50, y: 18, type: "agent", state: "idle", direction: "right", color: "#0f0" },
+    { id: "nimbus", name: "Nimbus", x: 20, y: 15, type: "agent", state: "working", direction: "right", color: "#0f0", thought: "Building UI..." },
+    { id: "jp", name: "JP", x: 35, y: 20, type: "human", state: "idle", direction: "left", color: "#fff", thought: "Reviewing code" },
+    { id: "codex", name: "Codex", x: 50, y: 18, type: "agent", state: "idle", direction: "right", color: "#0f0", thought: "Standing by" },
   ]);
 
   // Office furniture layout
@@ -250,14 +313,17 @@ export function OfficeWorld() {
     // Nimbus's desk area
     { id: "desk1", type: "desk", x: 18, y: 16, width: 6, height: 2 },
     { id: "chair1", type: "chair", x: 20, y: 18, width: 2, height: 2 },
+    { id: "pc1", type: "computer", x: 19, y: 15, width: 2, height: 2 },
     
     // JP's desk area
     { id: "desk2", type: "desk", x: 33, y: 21, width: 6, height: 2 },
     { id: "chair2", type: "chair", x: 35, y: 23, width: 2, height: 2 },
+    { id: "pc2", type: "computer", x: 34, y: 20, width: 2, height: 2 },
     
     // Codex's desk area
     { id: "desk3", type: "desk", x: 48, y: 19, width: 6, height: 2 },
     { id: "chair3", type: "chair", x: 50, y: 21, width: 2, height: 2 },
+    { id: "pc3", type: "computer", x: 49, y: 18, width: 2, height: 2 },
     
     // Server room
     { id: "server1", type: "server", x: 70, y: 10, width: 3, height: 6 },
@@ -278,6 +344,7 @@ export function OfficeWorld() {
 
   const [selectedChar, setSelectedChar] = useState<string | null>(null);
   const [time, setTime] = useState("");
+  const [serverBlink, setServerBlink] = useState(0);
 
   // Clock
   useEffect(() => {
@@ -288,6 +355,14 @@ export function OfficeWorld() {
     update();
     const i = setInterval(update, 1000);
     return () => clearInterval(i);
+  }, []);
+
+  // Server blink animation
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setServerBlink(prev => (prev + 1) % 4);
+    }, 300);
+    return () => clearInterval(interval);
   }, []);
 
   // Simple AI movement - characters occasionally move around
