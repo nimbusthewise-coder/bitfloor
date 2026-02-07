@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --foreground: #ffffff;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Pixel-perfect rendering */
+canvas,
+img {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* 1-bit button style */
+button {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+/* Remove default focus outline, add custom */
+button:focus {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}
