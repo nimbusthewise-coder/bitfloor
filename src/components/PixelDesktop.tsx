@@ -237,6 +237,12 @@ export function PixelDesktop() {
   const [topZ, setTopZ] = useState(1);
   const [time, setTime] = useState("");
   const [avatarConfig, setAvatarConfig] = useState<number[]>(() => generateRandomFace());
+  const [chatMessages, setChatMessages] = useState([
+    { from: "Nimbus", text: "Working on UI..." },
+    { from: "JP", text: "Looks great!" },
+    { from: "Nimbus", text: "Adding chat now" },
+  ]);
+  const [chatInput, setChatInput] = useState("");
 
   // Clock
   useState(() => {
@@ -473,14 +479,28 @@ export function PixelDesktop() {
                 title="Note"
                 x={win.x}
                 y={win.y}
-                width={UNIT * 16}
-                height={UNIT * 12}
+                width={UNIT * 18}
+                height={UNIT * 14}
                 zIndex={win.z}
                 onClose={() => closeWindow(win.id)}
                 onFocus={() => focusWindow(win.id)}
                 onDrag={(x, y) => moveWindow(win.id, x, y)}
               >
-                <div style={{ color: "#888" }}>Type a note...</div>
+                <textarea
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    background: "#000",
+                    color: "#fff",
+                    border: "none",
+                    outline: "none",
+                    resize: "none",
+                    fontFamily: "inherit",
+                    fontSize: "8px",
+                    lineHeight: "1.4",
+                  }}
+                  placeholder="Type a note..."
+                />
               </PixelWindow>
             );
           }
@@ -516,8 +536,8 @@ export function PixelDesktop() {
                 title="Team Chat"
                 x={win.x}
                 y={win.y}
-                width={UNIT * 28}
-                height={UNIT * 20}
+                width={UNIT * 30}
+                height={UNIT * 22}
                 zIndex={win.z}
                 onClose={() => closeWindow(win.id)}
                 onFocus={() => focusWindow(win.id)}
@@ -525,17 +545,33 @@ export function PixelDesktop() {
               >
                 <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
                   <div style={{ flex: 1, borderBottom: "1px solid #444", marginBottom: UNIT / 2, paddingBottom: UNIT / 2, overflow: "auto" }}>
-                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>Nimbus:</span> Working on UI...</div>
-                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>JP:</span> Looks great!</div>
-                    <div style={{ marginBottom: 4 }}><span style={{ color: "#888" }}>Nimbus:</span> Adding chat now</div>
+                    {chatMessages.map((msg, i) => (
+                      <div key={i} style={{ marginBottom: 4 }}>
+                        <span style={{ color: "#888" }}>{msg.from}:</span> {msg.text}
+                      </div>
+                    ))}
                   </div>
-                  <div style={{ 
-                    border: "1px solid #fff", 
-                    padding: "2px 4px",
-                    color: "#888",
-                  }}>
-                    Type here...
-                  </div>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && chatInput.trim()) {
+                        setChatMessages([...chatMessages, { from: "You", text: chatInput.trim() }]);
+                        setChatInput("");
+                      }
+                    }}
+                    style={{ 
+                      border: "1px solid #fff", 
+                      padding: "2px 4px",
+                      background: "#000",
+                      color: "#fff",
+                      fontFamily: "inherit",
+                      fontSize: "8px",
+                      outline: "none",
+                    }}
+                    placeholder="Type here..."
+                  />
                 </div>
               </PixelWindow>
             );
