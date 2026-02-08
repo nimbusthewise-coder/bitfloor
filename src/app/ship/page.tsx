@@ -19,6 +19,12 @@ import {
   getMoveRightVector,
   PHYSICS,
 } from "@/lib/physics";
+import {
+  findPath,
+  PathStep,
+  GravityDir,
+  canStand,
+} from "@/lib/pathfinding";
 
 // Character identities
 const nimbus: Identity = {
@@ -206,7 +212,7 @@ export default function ShipPage() {
   // Nimbus physics state
   const [charPhysics, setCharPhysics] = useState<PhysicsState>({
     x: 10 * TILE,
-    y: 3 * TILE,  // Start slightly above floor
+    y: 4 * TILE,  // Start on floor (y=4 is one above floor at y=5)
     vx: 0,
     vy: 0,
     gravity: "DOWN",
@@ -220,12 +226,29 @@ export default function ShipPage() {
   const [charFrame, setCharFrame] = useState(0);
   const [displayRotation, setDisplayRotation] = useState(0); // Animated rotation (degrees)
   
-  // Codex state (AI wandering)
-  const [codexX, setCodexX] = useState(20 * TILE); // Start in quarters
-  const [codexY, setCodexY] = useState(4 * TILE);
+  // Codex physics state (AI-controlled, same physics as Nimbus)
+  const [codexPhysics, setCodexPhysics] = useState<PhysicsState>({
+    x: 20 * TILE,  // Start in quarters
+    y: 4 * TILE,   // On floor (y=4 is one above floor at y=5)
+    vx: 0,
+    vy: 0,
+    gravity: "DOWN",
+    grounded: false,
+    width: 32,
+    height: 44,
+    jumpHeld: false,
+  });
   const [codexDir, setCodexDir] = useState<"left" | "right">("left");
-  const [codexAnim, setCodexAnim] = useState<"Idle" | "Run">("Run");
+  const [codexAnim, setCodexAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
   const [codexFrame, setCodexFrame] = useState(0);
+  const [codexDisplayRotation, setCodexDisplayRotation] = useState(0); // Animated rotation (degrees)
+  
+  // AI input state (what the AI "wants" to do this frame)
+  const codexInputRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
+  
+  // Path visualization
+  const [codexPath, setCodexPath] = useState<PathStep[]>([]);
+  const [showPaths, setShowPaths] = useState(true);
   
   // Sprite loading
   const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
@@ -301,6 +324,7 @@ export default function ShipPage() {
         jump: keys.has(" "),
       };
       
+      // Update Nimbus physics
       setCharPhysics(state => {
         const newState = updatePhysics(state, input, shipGrid, SOLID_TILES);
         
@@ -352,6 +376,31 @@ export default function ShipPage() {
         
         return newState;
       });
+      
+      // Update Codex physics (AI-driven)
+      setCodexPhysics(state => {
+        const codexInput = codexInputRef.current;
+        const newState = updatePhysics(state, codexInput, shipGrid, SOLID_TILES);
+        
+        // Update Codex facing direction
+        const moveRightVec = getMoveRightVector(newState.gravity);
+        const lateralVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
+        
+        if (lateralVel > 0.3) setCodexDir("right");
+        else if (lateralVel < -0.3) setCodexDir("left");
+        
+        // Update Codex animation
+        const isMoving = Math.abs(newState.vx) > 0.3 || Math.abs(newState.vy) > 0.3;
+        if (!newState.grounded) {
+          setCodexAnim("Jump");
+        } else if (isMoving) {
+          setCodexAnim("Run");
+        } else {
+          setCodexAnim("Idle");
+        }
+        
+        return newState;
+      });
     }, 16); // Single 60fps loop
     
     return () => clearInterval(gameLoop);
@@ -390,6 +439,32 @@ export default function ShipPage() {
     return () => clearInterval(rotationInterval);
   }, [charPhysics.gravity]);
   
+  // Smooth rotation animation for Codex when gravity changes
+  useEffect(() => {
+    const targetRotation = getGravityRotation(codexPhysics.gravity);
+    
+    const animateRotation = () => {
+      setCodexDisplayRotation(current => {
+        const normalizedCurrent = ((current % 360) + 360) % 360;
+        const normalizedTarget = ((targetRotation % 360) + 360) % 360;
+        
+        let diff = normalizedTarget - normalizedCurrent;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        
+        if (Math.abs(diff) < 2) return normalizedTarget;
+        
+        const speed = Math.max(11, Math.abs(diff) * 0.3);
+        const step = Math.sign(diff) * Math.min(speed, Math.abs(diff));
+        
+        return normalizedCurrent + step;
+      });
+    };
+    
+    const rotationInterval = setInterval(animateRotation, 16);
+    return () => clearInterval(rotationInterval);
+  }, [codexPhysics.gravity]);
+  
   // Animation frame update - Nimbus
   useEffect(() => {
     if (!sheet) return;
@@ -422,44 +497,96 @@ export default function ShipPage() {
     return () => clearInterval(interval);
   }, [codexAnim, sheet]);
   
-  // Codex AI - wander between waypoints
-  const codexTargetRef = useRef({ x: 5 * TILE, y: 4 * TILE });
+  // Codex AI - chase player using pathfinding
+  const codexPathIndexRef = useRef(0);
+  const lastPathTimeRef = useRef(0);
   
   useEffect(() => {
-    const waypoints = [
-      { x: 20 * TILE, y: 4 * TILE },  // Quarters
-      { x: 10 * TILE, y: 4 * TILE },  // Bridge
-      { x: 3 * TILE, y: 4 * TILE },   // Engine
-      { x: 10 * TILE, y: 9 * TILE },  // Mess Hall
-      { x: 20 * TILE, y: 9 * TILE },  // Rec Room
-    ];
-    
-    const moveInterval = setInterval(() => {
-      const target = codexTargetRef.current;
-      
-      setCodexX(x => {
-        const dx = target.x - x;
-        if (Math.abs(dx) < 4) {
-          // Pick new target when close
-          const newTarget = waypoints[Math.floor(Math.random() * waypoints.length)];
-          codexTargetRef.current = newTarget;
-          setCodexAnim("Idle");
-          return x;
+    const aiInterval = setInterval(() => {
+      // Recalculate path every 500ms
+      const now = Date.now();
+      if (now - lastPathTimeRef.current > 500) {
+        lastPathTimeRef.current = now;
+        
+        // Get standing tile position (use feet/bottom of collision box for DOWN gravity)
+        // For DOWN gravity: standing tile = floor tile - 1
+        // We calculate from collision box bottom (y + height) then go up one tile
+        const codexFootY = codexPhysics.y + codexPhysics.height;
+        const codexTileX = Math.floor(codexPhysics.x / TILE);
+        const codexTileY = Math.floor(codexFootY / TILE) - 1;  // Standing tile is above floor
+        
+        const playerFootY = charPhysics.y + charPhysics.height;
+        const playerTileX = Math.floor(charPhysics.x / TILE);
+        const playerTileY = Math.floor(playerFootY / TILE) - 1;
+        
+        // Only pathfind if both characters are grounded (valid standing positions)
+        if (codexPhysics.grounded && charPhysics.grounded) {
+          console.log("[Pathfinding] Codex:", { x: codexTileX, y: codexTileY, gravity: codexPhysics.gravity });
+          console.log("[Pathfinding] Player:", { x: playerTileX, y: playerTileY, gravity: charPhysics.gravity });
+          
+          const path = findPath(
+            shipGrid,
+            SOLID_TILES as string[],
+            { x: codexTileX, y: codexTileY, gravity: codexPhysics.gravity as GravityDir },
+            { x: playerTileX, y: playerTileY }
+          );
+          
+          console.log("[Pathfinding] Result:", path ? `${path.length} steps` : "null");
+          
+          if (path && path.length > 0) {
+            setCodexPath(path);
+            codexPathIndexRef.current = 1; // Start at step 1 (skip start position)
+          }
         }
-        setCodexDir(dx > 0 ? "right" : "left");
-        setCodexAnim("Run");
-        return x + (dx > 0 ? 2 : -2);
-      });
+      }
       
-      setCodexY(y => {
-        const dy = target.y - y;
-        if (Math.abs(dy) < 4) return y;
-        return y + (dy > 0 ? 2 : -2);
-      });
-    }, 32); // Slower update rate
+      // AI decision: look at current path step and decide input
+      const input: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
+      
+      if (codexPath.length > 0 && codexPathIndexRef.current < codexPath.length) {
+        const targetStep = codexPath[codexPathIndexRef.current];
+        const targetX = targetStep.node.x * TILE + TILE / 2;  // Center of target tile
+        const targetY = targetStep.node.y * TILE + TILE / 2;
+        const codexCenterX = codexPhysics.x + codexPhysics.width / 2;
+        const codexCenterY = codexPhysics.y + codexPhysics.height / 2;
+        
+        const dx = targetX - codexCenterX;
+        const dy = targetY - codexCenterY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check if we've reached this waypoint
+        if (dist < TILE / 2) {
+          codexPathIndexRef.current++;
+        } else {
+          // Determine input based on action and position
+          const action = targetStep.action;
+          
+          // For DOWN gravity: left/right are screen left/right
+          // For UP gravity: left/right are inverted
+          // The physics engine handles gravity-relative movement
+          if (codexPhysics.gravity === "DOWN" || codexPhysics.gravity === "UP") {
+            if (dx > 4) input.right = true;
+            else if (dx < -4) input.left = true;
+          } else {
+            // LEFT/RIGHT gravity: up/down become lateral
+            if (dy > 4) input.down = true;
+            else if (dy < -4) input.up = true;
+          }
+          
+          // Jump if path says to jump (and we're grounded)
+          if (action === "jump" && codexPhysics.grounded) {
+            input.jump = true;
+          }
+        }
+      }
+      
+      // Apply AI input
+      codexInputRef.current = input;
+      
+    }, 50); // AI runs at 20Hz
     
-    return () => clearInterval(moveInterval);
-  }, []); // No dependencies - runs once
+    return () => clearInterval(aiInterval);
+  }, [codexPath, codexPhysics.x, codexPhysics.y, codexPhysics.gravity, codexPhysics.grounded, charPhysics.x, charPhysics.y, charPhysics.grounded]);
   
   // Draw Nimbus
   useEffect(() => {
@@ -500,18 +627,24 @@ export default function ShipPage() {
     ctx.clearRect(0, 0, 48, 48);
     
     ctx.save();
+    ctx.translate(24, 24);  // Canvas center
+    
+    // Smooth animated rotation around collision center
+    ctx.rotate(codexDisplayRotation * Math.PI / 180);
+    
+    // Flip for direction
     if (codexDir === "left") {
-      ctx.translate(48, 0);
       ctx.scale(-1, 1);
     }
     
+    // Draw sprite centered at the rotation point
     ctx.drawImage(
       codexBaked.canvas,
       codexFrame * 48, 0, 48, 48,
-      0, 0, 48, 48
+      -24, -24, 48, 48
     );
     ctx.restore();
-  }, [codexBaked, codexFrame, codexDir]);
+  }, [codexBaked, codexFrame, codexDir, codexDisplayRotation]);
 
   // Calculate character positions relative to viewport
   // Sprite is 48×48, collision is 32×44
@@ -545,8 +678,9 @@ export default function ShipPage() {
   const charVisible = charScreenX > -48 && charScreenX < VIEW_W * TILE &&
                       charScreenY > -48 && charScreenY < VIEW_H * TILE;
   
-  const codexScreenX = Math.round(codexX - viewX * TILE);
-  const codexScreenY = Math.round(codexY - viewY * TILE);
+  const codexSpriteOffset = getSpriteOffset(codexPhysics.gravity);
+  const codexScreenX = Math.round(codexPhysics.x - viewX * TILE + codexSpriteOffset.x);
+  const codexScreenY = Math.round(codexPhysics.y - viewY * TILE + codexSpriteOffset.y);
   const codexVisible = codexScreenX > -48 && codexScreenX < VIEW_W * TILE &&
                        codexScreenY > -48 && codexScreenY < VIEW_H * TILE;
 
@@ -603,8 +737,20 @@ export default function ShipPage() {
         >
           CAM {cameraEnabled ? "ON" : "OFF"}
         </button>
+        <button
+          onClick={() => setShowPaths(p => !p)}
+          style={{
+            padding: "4px 8px",
+            background: showPaths ? "#fb923c" : "#333",
+            color: showPaths ? "#000" : "#fff",
+            border: "1px solid #fb923c",
+            cursor: "pointer",
+          }}
+        >
+          PATH {showPaths ? "ON" : "OFF"}
+        </button>
         <span style={{ color: "#666", alignSelf: "center" }}>
-          WASD move | Space = jump | Arrows = scroll
+          WASD move | Space = jump
         </span>
         <span style={{ 
           color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
@@ -685,6 +831,46 @@ export default function ShipPage() {
           })}
         </div>
         
+        {/* Path visualization */}
+        {showPaths && codexPath.length > 1 && (
+          <svg
+            style={{
+              position: "absolute",
+              left: -Math.floor(viewX) * TILE,
+              top: -Math.floor(viewY) * TILE,
+              width: SHIP_W * TILE,
+              height: SHIP_H * TILE,
+              pointerEvents: "none",
+              zIndex: 5,
+            }}
+          >
+            {/* Codex path (orange) */}
+            <polyline
+              points={codexPath.map(step => 
+                `${step.node.x * TILE + TILE/2},${step.node.y * TILE + TILE/2}`
+              ).join(" ")}
+              fill="none"
+              stroke="#fb923c"
+              strokeWidth="3"
+              strokeOpacity="0.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="8,4"
+            />
+            {/* Path nodes */}
+            {codexPath.map((step, i) => (
+              <circle
+                key={i}
+                cx={step.node.x * TILE + TILE/2}
+                cy={step.node.y * TILE + TILE/2}
+                r={i === 0 ? 6 : 4}
+                fill={step.action === "jump" ? "#ff6b6b" : step.action === "fall" ? "#fbbf24" : "#fb923c"}
+                opacity="0.8"
+              />
+            ))}
+          </svg>
+        )}
+        
         {/* Nimbus (player) */}
         {charVisible && (
           <canvas
@@ -702,7 +888,7 @@ export default function ShipPage() {
           />
         )}
         
-        {/* Codex (AI wandering) */}
+        {/* Codex (AI chasing) */}
         {codexVisible && (
           <canvas
             ref={codexCanvasRef}
@@ -770,8 +956,8 @@ export default function ShipPage() {
           {/* Codex marker on minimap */}
           <div style={{
             position: "absolute",
-            left: (codexX / TILE) * 4,
-            top: (codexY / TILE) * 4,
+            left: (codexPhysics.x / TILE) * 4,
+            top: (codexPhysics.y / TILE) * 4,
             width: 6,
             height: 6,
             background: "#fb923c",

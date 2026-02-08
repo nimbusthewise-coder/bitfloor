@@ -24,7 +24,7 @@ export interface PathEdge {
 // A step in a path (node + how we got there)
 export interface PathStep {
   node: PathNode;
-  action: "start" | "walk" | "jump" | "fall";
+  action: "start" | "walk" | "jump" | "fall" | "step";
 }
 
 // Serialize node for use as map key
@@ -149,7 +149,7 @@ function getJumpNeighbors(
   node: PathNode,
   grid: string[][],
   solidTypes: string[],
-  jumpHeight: number = 3  // Max tiles the character can jump
+  jumpHeight: number = 5  // Max tiles the character can jump (5 allows deck transitions)
 ): PathNode[] {
   const neighbors: PathNode[] = [];
   const floor = getFloorOffset(node.gravity);
@@ -258,13 +258,45 @@ function getFallNeighbors(
   return neighbors;
 }
 
-// Get all neighbors of a node (walk + jump + fall)
+// Get states reachable by stepping up/down (1 tile height difference)
+// This connects shaft bottoms to deck floors
+function getStepNeighbors(
+  node: PathNode,
+  grid: string[][],
+  solidTypes: string[]
+): PathNode[] {
+  const neighbors: PathNode[] = [];
+  const lateralDirs = getLateralDirs(node.gravity);
+  const floor = getFloorOffset(node.gravity);
+  
+  for (const lat of lateralDirs) {
+    // Check stepping up: move lateral + up one in gravity direction
+    // e.g., from (17,10,DOWN) step to (16,9,DOWN)
+    const stepUpX = node.x + lat.dx - floor.dx;
+    const stepUpY = node.y + lat.dy - floor.dy;
+    if (canStand(grid, stepUpX, stepUpY, node.gravity, solidTypes)) {
+      neighbors.push({ x: stepUpX, y: stepUpY, gravity: node.gravity });
+    }
+    
+    // Check stepping down: move lateral + down one in gravity direction  
+    // e.g., from (16,9,DOWN) step to (17,10,DOWN)
+    const stepDownX = node.x + lat.dx + floor.dx;
+    const stepDownY = node.y + lat.dy + floor.dy;
+    if (canStand(grid, stepDownX, stepDownY, node.gravity, solidTypes)) {
+      neighbors.push({ x: stepDownX, y: stepDownY, gravity: node.gravity });
+    }
+  }
+  
+  return neighbors;
+}
+
+// Get all neighbors of a node (walk + jump + fall + step)
 export function getNeighbors(
   node: PathNode,
   grid: string[][],
   solidTypes: string[]
-): { node: PathNode; action: "walk" | "jump" | "fall" }[] {
-  const neighbors: { node: PathNode; action: "walk" | "jump" | "fall" }[] = [];
+): { node: PathNode; action: "walk" | "jump" | "fall" | "step" }[] {
+  const neighbors: { node: PathNode; action: "walk" | "jump" | "fall" | "step" }[] = [];
   
   // Walking neighbors
   for (const n of getWalkNeighbors(node, grid, solidTypes)) {
@@ -279,6 +311,11 @@ export function getNeighbors(
   // Fall neighbors
   for (const n of getFallNeighbors(node, grid, solidTypes)) {
     neighbors.push({ node: n, action: "fall" });
+  }
+  
+  // Step neighbors (1-tile height changes)
+  for (const n of getStepNeighbors(node, grid, solidTypes)) {
+    neighbors.push({ node: n, action: "step" });
   }
   
   return neighbors;

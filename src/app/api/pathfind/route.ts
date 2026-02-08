@@ -112,9 +112,17 @@ export async function GET(request: Request) {
   if (action === "states") {
     // Return all valid standing positions (limited for performance)
     const states = getAllValidStates(shipGrid, SOLID_TILES);
+    
+    // Filter by y if specified
+    const filterY = searchParams.get("y");
+    const filteredStates = filterY 
+      ? states.filter(s => s.y === parseInt(filterY))
+      : states;
+    
     return NextResponse.json({
       count: states.length,
-      sample: states.slice(0, 50),  // First 50 only
+      filtered: filteredStates.length,
+      sample: filteredStates.slice(0, 100),  // First 100 of filtered
       byGravity: {
         DOWN: states.filter(s => s.gravity === "DOWN").length,
         UP: states.filter(s => s.gravity === "UP").length,
