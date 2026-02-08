@@ -333,7 +333,7 @@ export default function ShipPage() {
           ));
           
           // Spring physics: acceleration toward target, with damping
-          const stiffness = 0.04;  // How strongly camera pulls toward target
+          const stiffness = 0.004;  // How strongly camera pulls toward target
           const damping = 0.82;    // Velocity decay (lower = more lag/overshoot)
           
           setViewX(vx => {
@@ -631,7 +631,7 @@ export default function ShipPage() {
         {/* Tile container with pixel-snapped offset for smooth scrolling */}
         <div style={{
           position: "absolute",
-          transform: `translate(${-Math.round((viewX % 1) * TILE)}px, ${-Math.round((viewY % 1) * TILE)}px)`,
+          transform: `translate(${-Math.floor((viewX % 1) * TILE)}px, ${-Math.floor((viewY % 1) * TILE)}px)`,
         }}>
           {/* Render visible cells */}
           {visibleGrid.map((row, vy) => (
@@ -656,7 +656,7 @@ export default function ShipPage() {
         {/* Room labels (positioned with pixel-snapped offset) */}
         <div style={{
           position: "absolute",
-          transform: `translate(${-Math.round((viewX % 1) * TILE)}px, ${-Math.round((viewY % 1) * TILE)}px)`,
+          transform: `translate(${-Math.floor((viewX % 1) * TILE)}px, ${-Math.floor((viewY % 1) * TILE)}px)`,
         }}>
           {visibleRooms.map(room => {
             const labelX = (room.x - viewXInt + room.w / 2) * TILE;
