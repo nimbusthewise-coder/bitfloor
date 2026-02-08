@@ -11,56 +11,7 @@ import {
   getAllValidStates,
   GravityDir 
 } from "@/lib/pathfinding";
-
-// Simplified ship grid (matches ship/page.tsx structure)
-// In production, this would be shared or fetched
-const SHIP_W = 32;
-const SHIP_H = 16;
-const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk"];
-
-// Generate a simplified version of the ship grid
-function generateShipGrid(): string[][] {
-  const grid: string[][] = Array(SHIP_H).fill(null).map(() => 
-    Array(SHIP_W).fill("interior")
-  );
-  
-  // Hull outline
-  for (let x = 0; x < SHIP_W - 3; x++) {
-    grid[0][x] = "hull";
-    grid[11][x] = "hull";
-    grid[12][x] = "hull";
-  }
-  
-  // Side hull
-  for (let y = 0; y < 13; y++) {
-    grid[y][0] = "hull";
-    if (SHIP_W - 4 >= 0) grid[y][SHIP_W - 4] = "hull";
-  }
-  
-  // Upper deck floors (row 5)
-  for (let x = 1; x < SHIP_W - 4; x++) {
-    if (x !== 7 && x !== 8 && x !== 17 && x !== 18) { // Skip shafts
-      grid[5][x] = "floor";
-    }
-  }
-  
-  // Lower deck floors (row 10)  
-  for (let x = 1; x < SHIP_W - 4; x++) {
-    if (x !== 7 && x !== 8 && x !== 17 && x !== 18) { // Skip shafts
-      grid[10][x] = "floor";
-    }
-  }
-  
-  // Shafts (vertical passages - interior, not floor)
-  for (let y = 1; y < 11; y++) {
-    grid[y][7] = "interior";
-    grid[y][8] = "interior";
-    grid[y][17] = "interior";
-    grid[y][18] = "interior";
-  }
-  
-  return grid;
-}
+import { generateShipGrid, SOLID_TILES, SHIP_W, SHIP_H } from "@/lib/ship-grid";
 
 const shipGrid = generateShipGrid();
 

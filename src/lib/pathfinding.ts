@@ -339,7 +339,7 @@ export function findPath(
   
   // BFS setup
   const visited = new Set<string>();
-  const parent = new Map<string, { node: PathNode; action: "walk" | "jump" | "fall" }>();
+  const parent = new Map<string, { node: PathNode; action: "walk" | "jump" | "fall" | "step" }>();
   const queue: PathNode[] = [start];
   
   visited.add(nodeKey(start));
@@ -378,7 +378,7 @@ export function findPath(
 function reconstructPath(
   start: PathNode,
   goal: PathNode,
-  parent: Map<string, { node: PathNode; action: "walk" | "jump" | "fall" }>
+  parent: Map<string, { node: PathNode; action: "walk" | "jump" | "fall" | "step" }>
 ): PathStep[] {
   const path: PathStep[] = [];
   let current = goal;
@@ -443,6 +443,11 @@ export function describePath(path: PathStep[]): string {
       descriptions.push(`Jump to (${x}, ${y}), gravity → ${gravity}`);
     } else if (step.action === "fall") {
       descriptions.push(`Fall to (${x}, ${y})`);
+    } else if (step.action === "step") {
+      const prev = path[i - 1].node;
+      const dy = y - prev.y;
+      const dir = dy > 0 ? "down" : "up";
+      descriptions.push(`Step ${dir} to (${x}, ${y})`);
     }
   }
   
