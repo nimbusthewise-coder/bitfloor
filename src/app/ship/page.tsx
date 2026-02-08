@@ -284,9 +284,9 @@ export default function ShipPage() {
     };
   }, []);
   
-  // Physics loop
+  // Combined physics + camera loop (must be in sync to avoid jitter)
   useEffect(() => {
-    const physicsLoop = setInterval(() => {
+    const gameLoop = setInterval(() => {
       const keys = keysRef.current;
       
       // Screen-relative input: WASD = screen directions, Space = jump
@@ -302,7 +302,6 @@ export default function ShipPage() {
         const newState = updatePhysics(state, input, shipGrid, SOLID_TILES);
         
         // Update facing direction based on GRAVITY-RELATIVE lateral velocity
-        // "right" means moving in the positive lateral direction relative to current gravity
         const moveRightVec = getMoveRightVector(newState.gravity);
         const lateralVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
         
@@ -319,37 +318,27 @@ export default function ShipPage() {
           setCharAnim("Idle");
         }
         
+        // Camera follow (in same update for perfect sync)
+        if (cameraEnabled) {
+          const targetViewX = Math.max(0, Math.min(
+            SHIP_W - VIEW_W, 
+            newState.x / TILE - VIEW_W / 2
+          ));
+          const targetViewY = Math.max(0, Math.min(
+            SHIP_H - VIEW_H, 
+            newState.y / TILE - VIEW_H / 2
+          ));
+          
+          // Smooth lerp toward target (adjusted for 60fps)
+          setViewX(vx => vx + (targetViewX - vx) * 0.12);
+          setViewY(vy => vy + (targetViewY - vy) * 0.12);
+        }
+        
         return newState;
       });
-    }, 16);
+    }, 16); // Single 60fps loop
     
-    // Smooth camera follow
-    const cameraLoop = setInterval(() => {
-      if (!cameraEnabled) return;
-      
-      setCharPhysics(charState => {
-        // Center camera on player with smooth lerp
-        const targetViewX = Math.max(0, Math.min(
-          SHIP_W - VIEW_W, 
-          charState.x / TILE - VIEW_W / 2
-        ));
-        const targetViewY = Math.max(0, Math.min(
-          SHIP_H - VIEW_H, 
-          charState.y / TILE - VIEW_H / 2
-        ));
-        
-        // Smooth lerp toward target
-        setViewX(vx => vx + (targetViewX - vx) * 0.08);
-        setViewY(vy => vy + (targetViewY - vy) * 0.08);
-        
-        return charState; // Don't modify
-      });
-    }, 32); // Camera at 30fps
-    
-    return () => {
-      clearInterval(physicsLoop);
-      clearInterval(cameraLoop);
-    };
+    return () => clearInterval(gameLoop);
   }, [cameraEnabled]);
   
   // Smooth rotation animation when gravity changes
