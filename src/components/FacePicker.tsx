@@ -18,14 +18,14 @@ export function FacePicker({ initialConfig, onSelect, onClose }: FacePickerProps
   const [loaded, setLoaded] = useState(false);
 
   const featureNames = [
-    "Base",      // 0
-    "Head",      // 1
-    "Eyes",      // 2
-    "Nose",      // 3
-    "Mouth",     // 4
-    "Hair",      // 5
-    "Extra 1",   // 6
-    "Extra 2",   // 7
+    "Base",      // 0 - blank
+    "Head",      // 1 - face shape
+    "Eyes",      // 2 - eyes/brows
+    "Mouth",     // 3 - mouth
+    "Nose",      // 4 - nose
+    "Hair",      // 5 - hair style
+    "Glasses",   // 6 - eyewear 🤓
+    "Ears",      // 7 - ears
   ];
 
   useEffect(() => {
@@ -42,10 +42,11 @@ export function FacePicker({ initialConfig, onSelect, onClose }: FacePickerProps
     const ctx = canvasRef.current.getContext("2d");
     if (!ctx) return;
 
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, AVATAR_SIZE * 2, AVATAR_SIZE * 2);
 
-    // Draw face at 2x scale
+    // Draw face at 2x scale (crisp pixels)
     for (let f = 1; f < 8; f++) {
       const variantX = (config[f] || 0) * AVATAR_SIZE;
       const featureY = f * AVATAR_SIZE;

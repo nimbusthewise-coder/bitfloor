@@ -16,7 +16,7 @@ export default function IdentityCardApp() {
   const spriteRef = useRef<HTMLImageElement | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const featureNames = ["Base", "Head", "Eyes", "Nose", "Mouth", "Hair", "Extra 1", "Extra 2"];
+  const featureNames = ["Base", "Head", "Eyes", "Mouth", "Nose", "Hair", "Glasses", "Ears"];
 
   useEffect(() => {
     const img = new Image();
@@ -36,9 +36,20 @@ export default function IdentityCardApp() {
     const ctx = canvasRef.current.getContext("2d");
     if (!ctx) return;
 
-    ctx.fillStyle = "#000";
+    ctx.imageSmoothingEnabled = false;
+    
+    // White background fill
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, AVATAR_SIZE * 2, AVATAR_SIZE * 2);
+    
+    // Draw background tile scaled to fill the box
+    ctx.drawImage(
+      spriteRef.current,
+      64, 576, AVATAR_SIZE, AVATAR_SIZE, // tile at (1, 9) on sprite sheet
+      0, 0, AVATAR_SIZE * 2, AVATAR_SIZE * 2
+    );
 
+    // Draw face features
     for (let f = 1; f < 8; f++) {
       const variantX = (config[f] || 0) * AVATAR_SIZE;
       const featureY = f * AVATAR_SIZE;
@@ -272,8 +283,12 @@ export default function IdentityCardApp() {
                     if (el && spriteRef.current) {
                       const ctx = el.getContext("2d");
                       if (ctx) {
-                        ctx.fillStyle = "#000";
+                        ctx.imageSmoothingEnabled = false;
+                        // White background with tiled pattern
+                        ctx.fillStyle = "#fff";
                         ctx.fillRect(0, 0, 64, 64);
+                        ctx.drawImage(spriteRef.current, 64, 576, 64, 64, 0, 0, 64, 64);
+                        // Draw face features
                         for (let f = 1; f < 8; f++) {
                           const variantX = (config[f] || 0) * AVATAR_SIZE;
                           const featureY = f * AVATAR_SIZE;

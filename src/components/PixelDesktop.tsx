@@ -241,7 +241,9 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
   const [topZ, setTopZ] = useState(1);
   const [time, setTime] = useState("");
   // Nimbus's chosen face DNA - selected 2026-02-07
-  const NIMBUS_FACE = [0, 2, 3, 4, 8, 7, 7, 1];
+  // Face DNA - each array represents facial features [base, head, eyes, nose, mouth, hair, extra1, extra2]
+  const NIMBUS_FACE = [0, 2, 3, 4, 8, 7, 7, 1]; // Squared glasses, friendly smile
+  const JP_FACE = [0, 6, 0, 2, 8, 3, 8, 5];      // Round glasses, Creative Director
   const [avatarConfig, setAvatarConfig] = useState<number[]>(NIMBUS_FACE);
   const [chatChannel, setChatChannel] = useState("general");
   const [chatMessages, setChatMessages] = useState<{[key: string]: {from: string; text: string}[]}>({
@@ -298,7 +300,7 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
 
   // Fetch memory file list on mount
   useEffect(() => {
-    fetch("/api/memory?file=_list")
+    fetch("/bitfloor/api/memory?file=_list")
       .then(res => res.json())
       .then(data => {
         if (data.files) {
@@ -323,7 +325,7 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
   // Fetch memory content when file changes
   useEffect(() => {
     setMemoryLoading(true);
-    fetch(`/api/memory?file=${encodeURIComponent(memoryFile)}`)
+    fetch(`/bitfloor/api/memory?file=${encodeURIComponent(memoryFile)}`)
       .then(res => res.json())
       .then(data => {
         if (data.content) {
@@ -339,7 +341,7 @@ export function PixelDesktop({ onSwitchView }: PixelDesktopProps = {}) {
   // Fetch agent status periodically
   useEffect(() => {
     const fetchAgentStatus = () => {
-      fetch("/api/agent")
+      fetch("/bitfloor/api/agent")
         .then(res => res.json())
         .then(data => {
           setAgentStatus(data.status || "offline");
