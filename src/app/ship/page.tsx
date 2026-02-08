@@ -609,7 +609,7 @@ export default function ShipPage() {
         <span style={{ 
           color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
           alignSelf: "center",
-          marginLeft: 10,
+          marginLeft: "auto",  // Push to right side - no layout shift
         }}>
           Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}
         </span>
