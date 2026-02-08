@@ -534,13 +534,14 @@ export default function ShipPage() {
   };
   
   const spriteOffset = getSpriteOffset(charPhysics.gravity);
-  const charScreenX = charPhysics.x - viewX * TILE + spriteOffset.x;
-  const charScreenY = charPhysics.y - viewY * TILE + spriteOffset.y;
+  // Snap character positions to integer pixels for crisp rendering
+  const charScreenX = Math.round(charPhysics.x - viewX * TILE + spriteOffset.x);
+  const charScreenY = Math.round(charPhysics.y - viewY * TILE + spriteOffset.y);
   const charVisible = charScreenX > -48 && charScreenX < VIEW_W * TILE &&
                       charScreenY > -48 && charScreenY < VIEW_H * TILE;
   
-  const codexScreenX = codexX - viewX * TILE;
-  const codexScreenY = codexY - viewY * TILE;
+  const codexScreenX = Math.round(codexX - viewX * TILE);
+  const codexScreenY = Math.round(codexY - viewY * TILE);
   const codexVisible = codexScreenX > -48 && codexScreenX < VIEW_W * TILE &&
                        codexScreenY > -48 && codexScreenY < VIEW_H * TILE;
 
@@ -622,10 +623,10 @@ export default function ShipPage() {
         }}
         tabIndex={0}
       >
-        {/* Tile container with sub-pixel offset for smooth scrolling */}
+        {/* Tile container with pixel-snapped offset for smooth scrolling */}
         <div style={{
           position: "absolute",
-          transform: `translate(${-(viewX % 1) * TILE}px, ${-(viewY % 1) * TILE}px)`,
+          transform: `translate(${-Math.round((viewX % 1) * TILE)}px, ${-Math.round((viewY % 1) * TILE)}px)`,
         }}>
           {/* Render visible cells */}
           {visibleGrid.map((row, vy) => (
@@ -647,10 +648,10 @@ export default function ShipPage() {
           ))}
         </div>
 
-        {/* Room labels (positioned with sub-pixel offset) */}
+        {/* Room labels (positioned with pixel-snapped offset) */}
         <div style={{
           position: "absolute",
-          transform: `translate(${-(viewX % 1) * TILE}px, ${-(viewY % 1) * TILE}px)`,
+          transform: `translate(${-Math.round((viewX % 1) * TILE)}px, ${-Math.round((viewY % 1) * TILE)}px)`,
         }}>
           {visibleRooms.map(room => {
             const labelX = (room.x - viewXInt + room.w / 2) * TILE;
