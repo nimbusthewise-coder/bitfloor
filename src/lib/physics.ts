@@ -1,14 +1,7 @@
 /**
  * Bitship Physics Controller
  * 2D Platformer with omnidirectional gravity (gravity boots)
- * Uses vector-based collision system
  */
-
-import {
-  checkCollisions,
-  getGravityDirection as getGravityDir,
-  CollisionResult as VectorCollisionResult,
-} from "./vector-collision";
 
 // Gravity directions (4 cardinal for now, 8 with diagonals later)
 export type GravityDirection = "DOWN" | "UP" | "LEFT" | "RIGHT";
@@ -17,9 +10,8 @@ export type GravityDirection = "DOWN" | "UP" | "LEFT" | "RIGHT";
 export const PHYSICS = {
   // Gravity & jumping
   GRAVITY: 0.35,          // Acceleration per frame
-  JUMP_FORCE: 6.67,       // Initial jump velocity (~2 tile height)
-  MAX_FALL_SPEED: 6,      // Terminal velocity (falling toward floor)
-  MAX_JUMP_SPEED: 8,      // Max upward velocity (away from floor)
+  JUMP_FORCE: 6.67,          // Initial jump velocity (~2 tile height)
+  MAX_FALL_SPEED: 6,      // Terminal velocity
   
   // Ground movement (smooth acceleration model)
   GROUND_MAX_SPEED: 5,    // Max run speed on ground
@@ -28,7 +20,7 @@ export const PHYSICS = {
   
   // Air movement
   AIR_MAX_SPEED: 4,       // Max horizontal speed in air
-  AIR_ACCEL: 0.5,         // Air control acceleration (reduced)
+  AIR_ACCEL: 0.5,        // Air control acceleration (reduced)
   AIR_DECEL: 0.02,        // Very low air friction (space station!)
   
   TILE_SIZE: 32,
@@ -45,6 +37,14 @@ export interface PhysicsState {
   width: number;
   height: number;
   jumpHeld: boolean;  // Track if jump was held last frame (for edge detection)
+}
+
+// Collision result
+export interface CollisionResult {
+  collided: boolean;
+  surfaceNormal: GravityDirection | null;
+  tileX: number;
+  tileY: number;
 }
 
 // Tile types for collision
@@ -84,6 +84,70 @@ export function getMoveRightVector(gravity: GravityDirection): { x: number; y: n
     case "LEFT": return { x: 0, y: 1 };   // Wall on left, "right" is down
     case "RIGHT": return { x: 0, y: -1 }; // Wall on right, "right" is up
   }
+}
+
+// Determine which face of a tile was hit based on approach direction
+export function getSurfaceNormal(
+  charX: number, charY: number,
+  charW: number, charH: number,
+  tileX: number, tileY: number,
+  vx: number, vy: number
+): GravityDirection {
+  const tileSize = PHYSICS.TILE_SIZE;
+  const tileCenterX = tileX * tileSize + tileSize / 2;
+  const tileCenterY = tileY * tileSize + tileSize / 2;
+  const charCenterX = charX + charW / 2;
+  const charCenterY = charY + charH / 2;
+  
+  // Calculate overlap on each axis
+  const dx = charCenterX - tileCenterX;
+  const dy = charCenterY - tileCenterY;
+  
+  // Determine which face based on position and velocity
+  const overlapX = (charW / 2 + tileSize / 2) - Math.abs(dx);
+  const overlapY = (charH / 2 + tileSize / 2) - Math.abs(dy);
+  
+  // The face with less overlap is the one we hit
+  if (overlapX < overlapY) {
+    // Hit left or right face
+    return dx > 0 ? "LEFT" : "RIGHT";
+  } else {
+    // Hit top or bottom face
+    return dy > 0 ? "UP" : "DOWN";
+  }
+}
+
+// Check if a tile is solid
+export function isTileSolid(
+  tileGrid: string[][],
+  tileX: number,
+  tileY: number,
+  solidTypes: string[]
+): boolean {
+  if (tileY < 0 || tileY >= tileGrid.length) return false;
+  if (tileX < 0 || tileX >= tileGrid[0].length) return false;
+  return solidTypes.includes(tileGrid[tileY][tileX]);
+}
+
+// Get all tiles the character overlaps with
+export function getOverlappingTiles(
+  x: number, y: number, w: number, h: number
+): { x: number; y: number }[] {
+  const tileSize = PHYSICS.TILE_SIZE;
+  const tiles: { x: number; y: number }[] = [];
+  
+  const startX = Math.floor(x / tileSize);
+  const endX = Math.floor((x + w - 1) / tileSize);
+  const startY = Math.floor(y / tileSize);
+  const endY = Math.floor((y + h - 1) / tileSize);
+  
+  for (let ty = startY; ty <= endY; ty++) {
+    for (let tx = startX; tx <= endX; tx++) {
+      tiles.push({ x: tx, y: ty });
+    }
+  }
+  
+  return tiles;
 }
 
 // Screen-relative input (raw WASD)
@@ -156,27 +220,18 @@ export function updatePhysics(
   // Get movement vectors relative to current gravity
   const gravVec = getGravityVector(state.gravity);
   const jumpVec = getJumpVector(state.gravity);
-  const moveRightVec = getMoveRightVector(state.gravity);
   
-  // Apply gravity when NOT grounded
+  // Only apply gravity when NOT grounded
   if (!state.grounded) {
     newState.vx += gravVec.x * GRAVITY;
     newState.vy += gravVec.y * GRAVITY;
     
-    // Clamp fall speed (positive = moving toward floor)
+    // Clamp fall speed
     const fallSpeed = newState.vx * gravVec.x + newState.vy * gravVec.y;
     if (fallSpeed > MAX_FALL_SPEED) {
       const excess = fallSpeed - MAX_FALL_SPEED;
       newState.vx -= gravVec.x * excess;
       newState.vy -= gravVec.y * excess;
-    }
-    
-    // Clamp jump speed (negative = moving away from floor)
-    const jumpSpeed = -(newState.vx * gravVec.x + newState.vy * gravVec.y);
-    if (jumpSpeed > PHYSICS.MAX_JUMP_SPEED) {
-      const excess = jumpSpeed - PHYSICS.MAX_JUMP_SPEED;
-      newState.vx += gravVec.x * excess;
-      newState.vy += gravVec.y * excess;
     }
   } else {
     // When grounded, zero out velocity in gravity direction to prevent jitter
@@ -189,6 +244,9 @@ export function updatePhysics(
   
   // Convert screen input to gravity-relative input
   const relInput = toGravityRelative(input, state.gravity);
+  
+  // Get movement vectors relative to current gravity
+  const moveRightVec = getMoveRightVector(state.gravity);  // Perpendicular to gravity
   
   // === SMOOTH ACCELERATION MODEL ===
   // Instead of adding velocity directly (stuttery), we:
@@ -232,8 +290,13 @@ export function updatePhysics(
   newState.vx += moveRightVec.x * lateralDiff;
   newState.vy += moveRightVec.y * lateralDiff;
   
+  // Note: Forward/Back keys (W/S relative to gravity) don't move the character
+  // Only lateral movement (A/D relative) + JUMP. Forward/back reserved for
+  // future use (crouch, interact, climb ladders, etc.)
+  
   // Jump (only when grounded AND jump just pressed, not held)
-  const jumpPressed = relInput.jump && !state.jumpHeld;
+  // This prevents auto-bunny-hopping when holding jump through gravity changes
+  const jumpPressed = relInput.jump && !state.jumpHeld;  // Rising edge detection
   if (jumpPressed && state.grounded) {
     newState.vx += jumpVec.x * JUMP_FORCE;
     newState.vy += jumpVec.y * JUMP_FORCE;
@@ -247,81 +310,95 @@ export function updatePhysics(
   if (Math.abs(newState.vx) < 0.05) newState.vx = 0;
   if (Math.abs(newState.vy) < 0.05) newState.vy = 0;
   
-  // Apply velocity to position
+  // Store if we were grounded before moving
+  const wasGrounded = state.grounded;
+  
+  // Move and check collisions (separate X and Y for better collision response)
+  // Move X
   newState.x += newState.vx;
+  let collision = checkAndResolveCollision(newState, tileGrid, solidTypes, "x");
+  if (collision.collided && !wasGrounded) {
+    // Hit a wall while airborne - change gravity!
+    newState.gravity = collision.surfaceNormal!;
+    newState.grounded = true;
+    // Zero out velocity in the direction of the surface
+    const newGravVec = getGravityVector(newState.gravity);
+    newState.vx -= newGravVec.x * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
+    newState.vy -= newGravVec.y * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
+  }
+  
+  // Move Y
   newState.y += newState.vy;
-  
-  // === VECTOR-BASED COLLISION DETECTION ===
-  const collision = checkCollisions(
-    newState.x,
-    newState.y,
-    newState.width,
-    newState.height,
-    newState.vx,
-    newState.vy,
-    newState.gravity,
-    tileGrid,
-    PHYSICS.TILE_SIZE
-  );
-  
-  // Apply collision adjustments
-  newState.x += collision.adjustment.x;
-  newState.y += collision.adjustment.y;
-  
-  // Update grounded state
-  newState.grounded = collision.grounded;
-  
-  // If we hit a ceiling, zero out upward velocity
-  if (collision.ceilinged) {
-    const gravVel = newState.vx * (-gravVec.x) + newState.vy * (-gravVec.y);
-    if (gravVel > 0) {
-      newState.vx -= (-gravVec.x) * gravVel;
-      newState.vy -= (-gravVec.y) * gravVel;
-    }
-  }
-  
-  // If we hit walls, zero out lateral velocity in that direction
-  if (collision.walledLeft) {
-    const leftDir = { x: -moveRightVec.x, y: -moveRightVec.y };
-    const leftVel = newState.vx * leftDir.x + newState.vy * leftDir.y;
-    if (leftVel > 0) {
-      newState.vx -= leftDir.x * leftVel;
-      newState.vy -= leftDir.y * leftVel;
-    }
-  }
-  
-  if (collision.walledRight) {
-    const rightVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
-    if (rightVel > 0) {
-      newState.vx -= moveRightVec.x * rightVel;
-      newState.vy -= moveRightVec.y * rightVel;
-    }
-  }
-  
-  // Slope surface snapping for smooth slope traversal
-  if (collision.grounded && collision.groundNormal && collision.groundPoint) {
-    const normal = collision.groundNormal;
-    
-    // Check if this is a slope (not axis-aligned)
-    const isSlope = Math.abs(normal.x) > 0.1 && Math.abs(normal.y) > 0.1;
-    
-    if (isSlope) {
-      // Project velocity along slope surface
-      const velDotNormal = newState.vx * normal.x + newState.vy * normal.y;
-      if (velDotNormal > 0) {
-        // Moving into surface - project along it
-        newState.vx -= normal.x * velDotNormal;
-        newState.vy -= normal.y * velDotNormal;
-      }
+  collision = checkAndResolveCollision(newState, tileGrid, solidTypes, "y");
+  if (collision.collided) {
+    if (!wasGrounded) {
+      // Hit floor/ceiling while airborne - change gravity!
+      newState.gravity = collision.surfaceNormal!;
+      newState.grounded = true;
     } else {
-      // Flat surface - zero gravity-direction velocity when grounded
-      const gravVel = newState.vx * gravVec.x + newState.vy * gravVec.y;
-      if (gravVel > 0) {
-        newState.vx -= gravVec.x * gravVel;
-        newState.vy -= gravVec.y * gravVel;
-      }
+      // Already grounded, just stay grounded
+      newState.grounded = true;
+    }
+    // Zero out velocity toward surface
+    const newGravVec = getGravityVector(newState.gravity);
+    const velTowardSurface = newState.vx * newGravVec.x + newState.vy * newGravVec.y;
+    if (velTowardSurface > 0) {
+      newState.vx -= newGravVec.x * velTowardSurface;
+      newState.vy -= newGravVec.y * velTowardSurface;
+    }
+  }
+  
+  // Check if still grounded (not floating)
+  if (newState.grounded) {
+    const gravVec = getGravityVector(newState.gravity);
+    const checkX = newState.x + gravVec.x * 2;
+    const checkY = newState.y + gravVec.y * 2;
+    const tiles = getOverlappingTiles(checkX, checkY, newState.width, newState.height);
+    const stillOnGround = tiles.some(t => isTileSolid(tileGrid, t.x, t.y, solidTypes));
+    if (!stillOnGround) {
+      newState.grounded = false;
     }
   }
   
   return newState;
+}
+
+// Check collision and resolve (push character out of solid tiles)
+function checkAndResolveCollision(
+  state: PhysicsState,
+  tileGrid: string[][],
+  solidTypes: string[],
+  axis: "x" | "y"
+): CollisionResult {
+  const tiles = getOverlappingTiles(state.x, state.y, state.width, state.height);
+  const tileSize = PHYSICS.TILE_SIZE;
+  
+  for (const tile of tiles) {
+    if (isTileSolid(tileGrid, tile.x, tile.y, solidTypes)) {
+      // Collision! Resolve by pushing out
+      const normal = getSurfaceNormal(
+        state.x, state.y, state.width, state.height,
+        tile.x, tile.y, state.vx, state.vy
+      );
+      
+      // Push out based on the normal
+      if (axis === "x") {
+        if (normal === "LEFT") {
+          state.x = tile.x * tileSize + tileSize;
+        } else if (normal === "RIGHT") {
+          state.x = tile.x * tileSize - state.width;
+        }
+      } else {
+        if (normal === "UP") {
+          state.y = tile.y * tileSize + tileSize;
+        } else if (normal === "DOWN") {
+          state.y = tile.y * tileSize - state.height;
+        }
+      }
+      
+      return { collided: true, surfaceNormal: normal, tileX: tile.x, tileY: tile.y };
+    }
+  }
+  
+  return { collided: false, surfaceNormal: null, tileX: -1, tileY: -1 };
 }
