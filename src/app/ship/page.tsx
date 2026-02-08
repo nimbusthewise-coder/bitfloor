@@ -1,6 +1,61 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import {
+  loadSpriteSheet,
+  loadFaceSheet,
+  bakeIdentitySprites,
+  SpriteSheet,
+  FaceSheet,
+  BakedSprite,
+  Identity,
+} from "@/lib/sprites";
+import {
+  PhysicsState,
+  GravityDirection,
+  ScreenInput,
+  updatePhysics,
+  getGravityRotation,
+  getMoveRightVector,
+  PHYSICS,
+} from "@/lib/physics";
+
+// Character identities
+const nimbus: Identity = {
+  id: "nimbus",
+  name: "Nimbus",
+  faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
+  tints: {
+    Suit: "#4ade80",
+    Gloves: "#22c55e",
+    Boots: "#166534",
+    Helmet: "#86efac",
+  },
+  faceTints: {
+    skin: "#ffd5b5",
+    hair: "#4a3728",
+    background: "#d4fcd4",
+  },
+  speed: 1,
+};
+
+const codex: Identity = {
+  id: "codex",
+  name: "Codex",
+  faceDNA: [0, 1, 2, 3, 4, 5, 0, 0],
+  tints: {
+    Suit: "#fb923c",
+    Gloves: "#f97316",
+    Boots: "#c2410c",
+    Helmet: "#fdba74",
+  },
+  faceTints: {
+    skin: "#ffd5b5",
+    hair: "#8b4513",
+    background: "#fde8d4",
+  },
+  speed: 1.2,
+};
 
 // Color palette
 const COLORS = {
@@ -45,37 +100,21 @@ interface Room {
 
 const rooms: Room[] = [
   // === UPPER DECK (rows 1-5, 5 tiles: 4 space + 1 floor) ===
-  // Engine Room (left)
   { name: "Engine", x: 1, y: 1, w: 4, h: ROOM_H, type: "room" },
-  // Upper Hallway
-  { name: "Hall", x: 5, y: 1, w: 2, h: ROOM_H, type: "hallway" },
-  // Shaft 1 (vertical connection - spans both decks)
-  { name: "Shaft", x: 7, y: 1, w: 2, h: ROOM_H * 2, type: "shaft" },
-  // Bridge
+  { name: "Hall-U1", x: 5, y: 1, w: 2, h: ROOM_H, type: "hallway" },
+  { name: "Shaft-1", x: 7, y: 1, w: 2, h: ROOM_H * 2, type: "shaft" },
   { name: "Bridge", x: 9, y: 1, w: 6, h: ROOM_H, type: "room" },
-  // Upper Hallway Right
-  { name: "Hall", x: 15, y: 1, w: 2, h: ROOM_H, type: "hallway" },
-  // Shaft 2
-  { name: "Shaft", x: 17, y: 1, w: 2, h: ROOM_H * 2, type: "shaft" },
-  // Quarters
+  { name: "Hall-U2", x: 15, y: 1, w: 2, h: ROOM_H, type: "hallway" },
+  { name: "Shaft-2", x: 17, y: 1, w: 2, h: ROOM_H * 2, type: "shaft" },
   { name: "Quarters", x: 19, y: 1, w: 5, h: ROOM_H, type: "room" },
-  // Medical
   { name: "Medical", x: 24, y: 1, w: 5, h: ROOM_H, type: "room" },
   
   // === LOWER DECK (rows 6-10, 5 tiles: 4 space + 1 floor) ===
-  // Cargo Bay
   { name: "Cargo", x: 1, y: 1 + ROOM_H, w: 4, h: ROOM_H, type: "room" },
-  // Lower Hallway
-  { name: "Hall", x: 5, y: 1 + ROOM_H, w: 2, h: ROOM_H, type: "hallway" },
-  // (Shaft 1 spans here)
-  // Mess Hall
+  { name: "Hall-L1", x: 5, y: 1 + ROOM_H, w: 2, h: ROOM_H, type: "hallway" },
   { name: "Mess Hall", x: 9, y: 1 + ROOM_H, w: 6, h: ROOM_H, type: "room" },
-  // Lower Hallway R
-  { name: "Hall", x: 15, y: 1 + ROOM_H, w: 2, h: ROOM_H, type: "hallway" },
-  // (Shaft 2 spans here)
-  // Recreation
+  { name: "Hall-L2", x: 15, y: 1 + ROOM_H, w: 2, h: ROOM_H, type: "hallway" },
   { name: "Rec Room", x: 19, y: 1 + ROOM_H, w: 5, h: ROOM_H, type: "room" },
-  // Storage
   { name: "Storage", x: 24, y: 1 + ROOM_H, w: 5, h: ROOM_H, type: "room" },
 ];
 
@@ -151,29 +190,332 @@ function generateShipGrid(): CellType[][] {
 
 const shipGrid = generateShipGrid();
 
+// Solid tile types for collision
+const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk"];
+
 export default function ShipPage() {
   const [showGrid, setShowGrid] = useState(true);
   const [viewX, setViewX] = useState(0);
   const [viewY, setViewY] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Nimbus physics state
+  const [charPhysics, setCharPhysics] = useState<PhysicsState>({
+    x: 10 * TILE,
+    y: 3 * TILE,  // Start slightly above floor
+    vx: 0,
+    vy: 0,
+    gravity: "DOWN",
+    grounded: false,
+    width: 32,  // Collision box smaller than sprite
+    height: 44,
+    jumpHeld: false,  // For jump edge detection
+  });
+  const [charDir, setCharDir] = useState<"left" | "right">("right");
+  const [charAnim, setCharAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
+  const [charFrame, setCharFrame] = useState(0);
+  const [displayRotation, setDisplayRotation] = useState(0); // Animated rotation (degrees)
+  
+  // Codex state (AI wandering)
+  const [codexX, setCodexX] = useState(20 * TILE); // Start in quarters
+  const [codexY, setCodexY] = useState(4 * TILE);
+  const [codexDir, setCodexDir] = useState<"left" | "right">("left");
+  const [codexAnim, setCodexAnim] = useState<"Idle" | "Run">("Run");
+  const [codexFrame, setCodexFrame] = useState(0);
+  
+  // Sprite loading
+  const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
+  const [codexBaked, setCodexBaked] = useState<BakedSprite | null>(null);
+  const [sheet, setSheet] = useState<SpriteSheet | null>(null);
+  const charCanvasRef = useRef<HTMLCanvasElement>(null);
+  const codexCanvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Load sprites on mount
+  useEffect(() => {
+    async function load() {
+      const [spriteSheet, faceSheet] = await Promise.all([
+        loadSpriteSheet(
+          "/bitfloor/sprites/character-layers.png",
+          "/bitfloor/sprites/character-layers.json"
+        ),
+        loadFaceSheet("/bitfloor/sprites/face-32.png"),
+      ]);
+      setSheet(spriteSheet);
+      setNimbusBaked(bakeIdentitySprites(spriteSheet, nimbus, faceSheet));
+      setCodexBaked(bakeIdentitySprites(spriteSheet, codex, faceSheet));
+    }
+    load();
+  }, []);
 
   // Scroll handling
   const handleScroll = (dx: number, dy: number) => {
     setViewX(x => Math.max(0, Math.min(SHIP_W - VIEW_W, x + dx)));
     setViewY(y => Math.max(0, Math.min(SHIP_H - VIEW_H, y + dy)));
   };
-
-  // Keyboard navigation
+  
+  // Keyboard input
+  const keysRef = useRef(new Set<string>());
+  
   useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      keysRef.current.add(e.key.toLowerCase());
+      
+      // Arrows = viewport scroll
       if (e.key === "ArrowLeft") handleScroll(-1, 0);
       if (e.key === "ArrowRight") handleScroll(1, 0);
       if (e.key === "ArrowUp") handleScroll(0, -1);
       if (e.key === "ArrowDown") handleScroll(0, 1);
+      
+      // Prevent space from scrolling page
+      if (e.key === " ") e.preventDefault();
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      keysRef.current.delete(e.key.toLowerCase());
+    };
+    
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, []);
+  
+  // Physics loop
+  useEffect(() => {
+    const physicsLoop = setInterval(() => {
+      const keys = keysRef.current;
+      
+      // Screen-relative input: WASD = screen directions, Space = jump
+      const input: ScreenInput = {
+        up: keys.has("w"),
+        down: keys.has("s"),
+        left: keys.has("a"),
+        right: keys.has("d"),
+        jump: keys.has(" "),
+      };
+      
+      setCharPhysics(state => {
+        const newState = updatePhysics(state, input, shipGrid, SOLID_TILES);
+        
+        // Update facing direction based on GRAVITY-RELATIVE lateral velocity
+        // "right" means moving in the positive lateral direction relative to current gravity
+        const moveRightVec = getMoveRightVector(newState.gravity);
+        const lateralVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
+        
+        if (lateralVel > 0.3) setCharDir("right");
+        else if (lateralVel < -0.3) setCharDir("left");
+        
+        // Update animation based on total movement
+        const isMoving = Math.abs(newState.vx) > 0.3 || Math.abs(newState.vy) > 0.3;
+        if (!newState.grounded) {
+          setCharAnim("Jump");
+        } else if (isMoving) {
+          setCharAnim("Run");
+        } else {
+          setCharAnim("Idle");
+        }
+        
+        return newState;
+      });
+    }, 16);
+    
+    return () => clearInterval(physicsLoop);
+  }, []);
+  
+  // Smooth rotation animation when gravity changes
+  useEffect(() => {
+    const targetRotation = getGravityRotation(charPhysics.gravity);
+    
+    const animateRotation = () => {
+      setDisplayRotation(current => {
+        // Normalize both angles to 0-360
+        const normalizedCurrent = ((current % 360) + 360) % 360;
+        const normalizedTarget = ((targetRotation % 360) + 360) % 360;
+        
+        // Calculate shortest path
+        let diff = normalizedTarget - normalizedCurrent;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        
+        // If close enough, snap to target
+        if (Math.abs(diff) < 2) {
+          return normalizedTarget;
+        }
+        
+        // Animate: ~300ms total at 60fps = 18 frames, so move ~5-20 degrees per frame
+        // Use easing: faster when far, slower when close
+        const speed = Math.max(11, Math.abs(diff) * 0.3);
+        const step = Math.sign(diff) * Math.min(speed, Math.abs(diff));
+        
+        return normalizedCurrent + step;
+      });
+    };
+    
+    const rotationInterval = setInterval(animateRotation, 16);
+    return () => clearInterval(rotationInterval);
+  }, [charPhysics.gravity]);
+  
+  // Animation frame update - Nimbus
+  useEffect(() => {
+    if (!sheet) return;
+    const tag = sheet.tags.find(t => t.name === charAnim);
+    if (!tag) return;
+    
+    const interval = setInterval(() => {
+      setCharFrame(f => {
+        const next = f + 1;
+        return next > tag.to ? tag.from : (f < tag.from ? tag.from : next);
+      });
+    }, 100);
+    
+    return () => clearInterval(interval);
+  }, [charAnim, sheet]);
+  
+  // Animation frame update - Codex
+  useEffect(() => {
+    if (!sheet) return;
+    const tag = sheet.tags.find(t => t.name === codexAnim);
+    if (!tag) return;
+    
+    const interval = setInterval(() => {
+      setCodexFrame(f => {
+        const next = f + 1;
+        return next > tag.to ? tag.from : (f < tag.from ? tag.from : next);
+      });
+    }, 150); // Walking pace animation
+    
+    return () => clearInterval(interval);
+  }, [codexAnim, sheet]);
+  
+  // Codex AI - wander between waypoints
+  const codexTargetRef = useRef({ x: 5 * TILE, y: 4 * TILE });
+  
+  useEffect(() => {
+    const waypoints = [
+      { x: 20 * TILE, y: 4 * TILE },  // Quarters
+      { x: 10 * TILE, y: 4 * TILE },  // Bridge
+      { x: 3 * TILE, y: 4 * TILE },   // Engine
+      { x: 10 * TILE, y: 9 * TILE },  // Mess Hall
+      { x: 20 * TILE, y: 9 * TILE },  // Rec Room
+    ];
+    
+    const moveInterval = setInterval(() => {
+      const target = codexTargetRef.current;
+      
+      setCodexX(x => {
+        const dx = target.x - x;
+        if (Math.abs(dx) < 4) {
+          // Pick new target when close
+          const newTarget = waypoints[Math.floor(Math.random() * waypoints.length)];
+          codexTargetRef.current = newTarget;
+          setCodexAnim("Idle");
+          return x;
+        }
+        setCodexDir(dx > 0 ? "right" : "left");
+        setCodexAnim("Run");
+        return x + (dx > 0 ? 2 : -2);
+      });
+      
+      setCodexY(y => {
+        const dy = target.y - y;
+        if (Math.abs(dy) < 4) return y;
+        return y + (dy > 0 ? 2 : -2);
+      });
+    }, 32); // Slower update rate
+    
+    return () => clearInterval(moveInterval);
+  }, []); // No dependencies - runs once
+  
+  // Draw Nimbus
+  useEffect(() => {
+    if (!nimbusBaked || !charCanvasRef.current) return;
+    const ctx = charCanvasRef.current.getContext("2d");
+    if (!ctx) return;
+    
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 48, 48);
+    
+    ctx.save();
+    ctx.translate(24, 24);  // Canvas center
+    
+    // Smooth animated rotation around collision center
+    ctx.rotate(displayRotation * Math.PI / 180);
+    
+    // Flip for direction
+    if (charDir === "left") {
+      ctx.scale(-1, 1);
+    }
+    
+    // Draw sprite centered at the rotation point
+    ctx.drawImage(
+      nimbusBaked.canvas,
+      charFrame * 48, 0, 48, 48,
+      -24, -24, 48, 48
+    );
+    ctx.restore();
+  }, [nimbusBaked, charFrame, charDir, displayRotation]);
+  
+  // Draw Codex
+  useEffect(() => {
+    if (!codexBaked || !codexCanvasRef.current) return;
+    const ctx = codexCanvasRef.current.getContext("2d");
+    if (!ctx) return;
+    
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 48, 48);
+    
+    ctx.save();
+    if (codexDir === "left") {
+      ctx.translate(48, 0);
+      ctx.scale(-1, 1);
+    }
+    
+    ctx.drawImage(
+      codexBaked.canvas,
+      codexFrame * 48, 0, 48, 48,
+      0, 0, 48, 48
+    );
+    ctx.restore();
+  }, [codexBaked, codexFrame, codexDir]);
+
+  // Calculate character positions relative to viewport
+  // Sprite is 48×48, collision is 32×44
+  // We need to align sprite "feet" with collision "floor edge" for each gravity
+  // The offset changes based on gravity orientation since collision box doesn't rotate
+  
+  // Offset from collision top-left to where 48×48 sprite should be drawn
+  // to align the visual feet with collision floor-side
+  const getSpriteOffset = (gravity: GravityDirection): { x: number; y: number } => {
+    const spriteW = 48, spriteH = 48;
+    const collW = 32, collH = 44;
+    const extraW = (spriteW - collW) / 2;  // 8px
+    const extraH = (spriteW - collH) / 2;  // 2px (using spriteW for both since rotated sprite is square)
+    
+    switch (gravity) {
+      case "DOWN":  // Feet at bottom - align sprite bottom with collision bottom
+        return { x: -extraW, y: -(spriteH - collH) };  // (-8, -4)
+      case "UP":    // Feet at top - align sprite top with collision top
+        return { x: -extraW, y: 0 };  // (-8, 0)
+      case "LEFT":  // Feet at left - align sprite left with collision left
+        return { x: 0, y: -extraW };  // (0, -8)
+      case "RIGHT": // Feet at right - align sprite right with collision right
+        return { x: -(spriteW - collW), y: -extraW };  // (-16, -8)
+    }
+  };
+  
+  const spriteOffset = getSpriteOffset(charPhysics.gravity);
+  const charScreenX = charPhysics.x - viewX * TILE + spriteOffset.x;
+  const charScreenY = charPhysics.y - viewY * TILE + spriteOffset.y;
+  const charVisible = charScreenX > -48 && charScreenX < VIEW_W * TILE &&
+                      charScreenY > -48 && charScreenY < VIEW_H * TILE;
+  
+  const codexScreenX = codexX - viewX * TILE;
+  const codexScreenY = codexY - viewY * TILE;
+  const codexVisible = codexScreenX > -48 && codexScreenX < VIEW_W * TILE &&
+                       codexScreenY > -48 && codexScreenY < VIEW_H * TILE;
 
   // Get visible portion of grid
   const visibleGrid = shipGrid
@@ -214,7 +556,14 @@ export default function ShipPage() {
           GRID {showGrid ? "ON" : "OFF"}
         </button>
         <span style={{ color: "#666", alignSelf: "center" }}>
-          Arrow keys to scroll | View: ({viewX}, {viewY})
+          WASD move | Space = flip gravity | Arrows = scroll
+        </span>
+        <span style={{ 
+          color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
+          alignSelf: "center",
+          marginLeft: 10,
+        }}>
+          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}
         </span>
       </div>
 
@@ -275,6 +624,40 @@ export default function ShipPage() {
             </div>
           );
         })}
+        
+        {/* Nimbus (player) */}
+        {charVisible && (
+          <canvas
+            ref={charCanvasRef}
+            width={48}
+            height={48}
+            style={{
+              position: "absolute",
+              left: charScreenX,
+              top: charScreenY,
+              imageRendering: "pixelated",
+              pointerEvents: "none",
+              zIndex: 10,
+            }}
+          />
+        )}
+        
+        {/* Codex (AI wandering) */}
+        {codexVisible && (
+          <canvas
+            ref={codexCanvasRef}
+            width={48}
+            height={48}
+            style={{
+              position: "absolute",
+              left: codexScreenX,
+              top: codexScreenY,
+              imageRendering: "pixelated",
+              pointerEvents: "none",
+              zIndex: 10,
+            }}
+          />
+        )}
       </div>
 
       {/* Minimap */}
@@ -312,6 +695,28 @@ export default function ShipPage() {
             height: VIEW_H * 4,
             border: "1px solid #0f0",
             boxSizing: "border-box",
+          }} />
+          {/* Nimbus marker on minimap */}
+          <div style={{
+            position: "absolute",
+            left: (charPhysics.x / TILE) * 4,
+            top: (charPhysics.y / TILE) * 4,
+            width: 6,
+            height: 6,
+            background: "#4ade80",
+            borderRadius: "50%",
+            transform: "translate(-50%, -50%)",
+          }} />
+          {/* Codex marker on minimap */}
+          <div style={{
+            position: "absolute",
+            left: (codexX / TILE) * 4,
+            top: (codexY / TILE) * 4,
+            width: 6,
+            height: 6,
+            background: "#fb923c",
+            borderRadius: "50%",
+            transform: "translate(-50%, -50%)",
           }} />
         </div>
       </div>
