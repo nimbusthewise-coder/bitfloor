@@ -246,7 +246,6 @@ export default function ShipPage() {
     width: 32,  // Collision box smaller than sprite
     height: 44,
     jumpHeld: false,  // For jump edge detection
-    onSlope: false,   // Track if on slope (stair dilemma fix)
   });
   const [charDir, setCharDir] = useState<"left" | "right">("right");
   const [charAnim, setCharAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
@@ -704,7 +703,7 @@ export default function ShipPage() {
           alignSelf: "center",
           marginLeft: 10,
         }}>
-          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}{charPhysics.onSlope ? " | 📐 Slope" : ""}
+          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}
         </span>
       </div>
 
