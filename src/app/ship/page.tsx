@@ -200,6 +200,9 @@ export default function ShipPage() {
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Spring camera velocity (for smooth ease in-out)
+  const cameraVelRef = useRef({ x: 0, y: 0 });
+  
   // Nimbus physics state
   const [charPhysics, setCharPhysics] = useState<PhysicsState>({
     x: 10 * TILE,
@@ -318,7 +321,7 @@ export default function ShipPage() {
           setCharAnim("Idle");
         }
         
-        // Camera follow (in same update for perfect sync)
+        // Spring camera follow (ease in-out with natural lag)
         if (cameraEnabled) {
           const targetViewX = Math.max(0, Math.min(
             SHIP_W - VIEW_W, 
@@ -329,9 +332,22 @@ export default function ShipPage() {
             newState.y / TILE - VIEW_H / 2
           ));
           
-          // Smooth lerp toward target (adjusted for 60fps)
-          setViewX(vx => vx + (targetViewX - vx) * 0.12);
-          setViewY(vy => vy + (targetViewY - vy) * 0.12);
+          // Spring physics: acceleration toward target, with damping
+          const stiffness = 0.04;  // How strongly camera pulls toward target
+          const damping = 0.82;    // Velocity decay (lower = more lag/overshoot)
+          
+          setViewX(vx => {
+            const vel = cameraVelRef.current;
+            vel.x += (targetViewX - vx) * stiffness;
+            vel.x *= damping;
+            return vx + vel.x;
+          });
+          setViewY(vy => {
+            const vel = cameraVelRef.current;
+            vel.y += (targetViewY - vy) * stiffness;
+            vel.y *= damping;
+            return vy + vel.y;
+          });
         }
         
         return newState;
