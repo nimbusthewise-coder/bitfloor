@@ -37,6 +37,7 @@ export interface PhysicsState {
   width: number;
   height: number;
   jumpHeld: boolean;  // Track if jump was held last frame (for edge detection)
+  onSlope: boolean;   // Currently on a slope (for stair dilemma fix)
 }
 
 // Collision result
@@ -45,6 +46,86 @@ export interface CollisionResult {
   surfaceNormal: GravityDirection | null;
   tileX: number;
   tileY: number;
+}
+
+// Triangle slope types (named by which corner is solid)
+export const SLOPE_TILES = ["slopeBL", "slopeBR", "slopeUL", "slopeUR"];
+
+// Check if a point is inside the solid part of a triangle tile
+// Returns true if the point should collide with this triangle
+export function isPointInSlopeSolid(
+  tileType: string,
+  px: number, // Point x relative to tile (0-32)
+  py: number  // Point y relative to tile (0-32)
+): boolean {
+  const size = PHYSICS.TILE_SIZE;
+  // Normalize to 0-1 (y=0 is top, y=1 is bottom in screen coords)
+  const nx = px / size;
+  const ny = py / size;
+  
+  switch (tileType) {
+    case "slopeBL": // ◣ solid bottom-left, diagonal y=x from (0,0) to (1,1)
+      // Solid where: y >= x (below/on the diagonal)
+      return ny >= nx;
+    case "slopeBR": // ◢ solid bottom-right, diagonal y=1-x from (1,0) to (0,1)
+      // Solid where: y >= 1-x (below/on the diagonal)
+      return ny >= 1 - nx;
+    case "slopeUL": // ◤ solid upper-left, diagonal y=1-x from (1,0) to (0,1)
+      // Solid where: y <= 1-x (above/on the diagonal)
+      return ny <= 1 - nx;
+    case "slopeUR": // ◥ solid upper-right, diagonal y=x from (0,0) to (1,1)
+      // Solid where: y <= x (above/on the diagonal)
+      return ny <= nx;
+    default:
+      return false;
+  }
+}
+
+// Get the surface normal for a triangle slope (the 45° diagonal surface)
+export function getSlopeNormal(tileType: string): GravityDirection {
+  // Surface normal points AWAY from the solid part
+  switch (tileType) {
+    case "slopeBL": return "UP";     // ◣ surface faces up-right, simplified to UP for now
+    case "slopeBR": return "UP";     // ◢ surface faces up-left, simplified to UP for now
+    case "slopeUL": return "DOWN";   // ◤ surface faces down-right, simplified to DOWN
+    case "slopeUR": return "DOWN";   // ◥ surface faces down-left, simplified to DOWN
+    default: return "DOWN";
+  }
+}
+
+// Get the Y position of a slope surface at a given X position
+// Returns the Y coordinate of the diagonal surface at that X
+export function getSlopeSurfaceY(
+  tileType: string,
+  tileLeft: number,
+  tileTop: number,
+  footX: number
+): number | null {
+  const tileSize = PHYSICS.TILE_SIZE;
+  const relX = footX - tileLeft;
+  
+  // Only valid if footX is within tile bounds
+  if (relX < 0 || relX > tileSize) return null;
+  
+  const normalizedX = relX / tileSize;
+  
+  switch (tileType) {
+    case "slopeBL": // ◣ surface goes from top-left (y=0) to bottom-right (y=1)
+      return tileTop + normalizedX * tileSize;
+    case "slopeBR": // ◢ surface goes from top-right (y=0) to bottom-left (y=1)
+      return tileTop + (1 - normalizedX) * tileSize;
+    case "slopeUL": // ◤ ceiling slope - top-right to bottom-left
+      return tileTop + (1 - normalizedX) * tileSize;
+    case "slopeUR": // ◥ ceiling slope - top-left to bottom-right
+      return tileTop + normalizedX * tileSize;
+    default:
+      return null;
+  }
+}
+
+// Check if a slope is a floor slope (walkable from above)
+export function isFloorSlope(tileType: string): boolean {
+  return tileType === "slopeBL" || tileType === "slopeBR";
 }
 
 // Tile types for collision
@@ -314,17 +395,22 @@ export function updatePhysics(
   const wasGrounded = state.grounded;
   
   // Move and check collisions (separate X and Y for better collision response)
-  // Move X
+  // Move X - BUT skip X collision when on slope to prevent getting stuck on adjacent tiles
   newState.x += newState.vx;
-  let collision = checkAndResolveCollision(newState, tileGrid, solidTypes, "x");
-  if (collision.collided && !wasGrounded) {
-    // Hit a wall while airborne - change gravity!
-    newState.gravity = collision.surfaceNormal!;
-    newState.grounded = true;
-    // Zero out velocity in the direction of the surface
-    const newGravVec = getGravityVector(newState.gravity);
-    newState.vx -= newGravVec.x * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
-    newState.vy -= newGravVec.y * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
+  let collision: CollisionResult = { collided: false, surfaceNormal: null, tileX: -1, tileY: -1 };
+  
+  if (!state.onSlope) {
+    // Only check X collision when NOT on a slope
+    collision = checkAndResolveCollision(newState, tileGrid, solidTypes, "x");
+    if (collision.collided && !wasGrounded) {
+      // Hit a wall while airborne - change gravity!
+      newState.gravity = collision.surfaceNormal!;
+      newState.grounded = true;
+      // Zero out velocity in the direction of the surface
+      const newGravVec = getGravityVector(newState.gravity);
+      newState.vx -= newGravVec.x * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
+      newState.vy -= newGravVec.y * (newState.vx * newGravVec.x + newState.vy * newGravVec.y);
+    }
   }
   
   // Move Y
@@ -348,19 +434,134 @@ export function updatePhysics(
     }
   }
   
-  // Check if still grounded (not floating)
-  if (newState.grounded) {
-    const gravVec = getGravityVector(newState.gravity);
-    const checkX = newState.x + gravVec.x * 2;
-    const checkY = newState.y + gravVec.y * 2;
-    const tiles = getOverlappingTiles(checkX, checkY, newState.width, newState.height);
-    const stillOnGround = tiles.some(t => isTileSolid(tileGrid, t.x, t.y, solidTypes));
-    if (!stillOnGround) {
-      newState.grounded = false;
+  // === SLOPE POST-PROCESSING ===
+  // Slopes are NON-SOLID for regular collision, so we handle them here.
+  // Based on: https://danjb.com/game_dev/tilebased_platformer_slopes
+  
+  const tileSize = PHYSICS.TILE_SIZE;
+  const footX = newState.x + newState.width / 2;  // "Slope node" = center of bottom edge
+  const footY = newState.y + newState.height;
+  const footTileX = Math.floor(footX / tileSize);
+  const footTileY = Math.floor(footY / tileSize);
+  
+  // Find slope at current foot position (or adjacent tiles)
+  let currentSlope: { tileX: number; tileY: number; type: string; surfaceY: number } | null = null;
+  
+  // Check current tile and tile above (slope might be at tile boundary)
+  const tilesToCheck = [
+    { x: footTileX, y: footTileY },
+    { x: footTileX, y: footTileY - 1 },
+  ];
+  
+  for (const t of tilesToCheck) {
+    if (t.y < 0 || t.y >= tileGrid.length) continue;
+    if (t.x < 0 || t.x >= tileGrid[0].length) continue;
+    
+    const tileType = tileGrid[t.y][t.x];
+    if (!isFloorSlope(tileType)) continue;
+    
+    const surfaceY = getSlopeSurfaceY(tileType, t.x * tileSize, t.y * tileSize, footX);
+    if (surfaceY === null) continue;
+    
+    // Check if foot is at or below the slope surface (within this tile)
+    if (footY >= surfaceY - 4) {
+      // Pick the highest (smallest Y) surface we're intersecting
+      if (!currentSlope || surfaceY < currentSlope.surfaceY) {
+        currentSlope = { tileX: t.x, tileY: t.y, type: tileType, surfaceY };
+      }
+    }
+  }
+  
+  // === THE STAIR DILEMMA FIX ===
+  // If player WAS on a slope but isn't anymore, and wasn't jumping,
+  // try to pull them down onto the slope below.
+  if (!currentSlope && state.onSlope && newState.grounded && newState.gravity === "DOWN") {
+    // Check tiles below current position for slopes
+    const checkTileY = footTileY + 1;
+    if (checkTileY >= 0 && checkTileY < tileGrid.length) {
+      const tileType = tileGrid[checkTileY]?.[footTileX];
+      if (isFloorSlope(tileType)) {
+        const surfaceY = getSlopeSurfaceY(tileType, footTileX * tileSize, checkTileY * tileSize, footX);
+        if (surfaceY !== null) {
+          // Pull down to slope (stair dilemma fix)
+          currentSlope = { tileX: footTileX, tileY: checkTileY, type: tileType, surfaceY };
+        }
+      }
+    }
+  }
+  
+  // Apply slope snapping
+  if (currentSlope && newState.gravity === "DOWN") {
+    const targetY = currentSlope.surfaceY - newState.height;
+    newState.y = targetY;
+    newState.grounded = true;
+    newState.onSlope = true;
+    
+    // Zero out vertical velocity when on slope
+    if (newState.vy > 0) {
+      newState.vy = 0;
+    }
+  } else {
+    newState.onSlope = false;
+  }
+  
+  // === CHECK IF STILL GROUNDED (non-slope) ===
+  if (newState.grounded && !newState.onSlope) {
+    if (newState.gravity === "DOWN") {
+      // Check if there's a solid tile below
+      const checkY = newState.y + newState.height + 2;
+      const checkTileY = Math.floor(checkY / tileSize);
+      const checkTileX = Math.floor((newState.x + newState.width / 2) / tileSize);
+      
+      if (checkTileY >= 0 && checkTileY < tileGrid.length && 
+          checkTileX >= 0 && checkTileX < tileGrid[0].length) {
+        const tileBelow = tileGrid[checkTileY][checkTileX];
+        const isSolid = solidTypes.includes(tileBelow) && !SLOPE_TILES.includes(tileBelow);
+        if (!isSolid) {
+          newState.grounded = false;
+        }
+      } else {
+        newState.grounded = false;
+      }
+    } else {
+      // Non-DOWN gravity: use original check
+      const gravVec = getGravityVector(newState.gravity);
+      const checkX = newState.x + gravVec.x * 2;
+      const checkY = newState.y + gravVec.y * 2;
+      const tiles = getOverlappingTiles(checkX, checkY, newState.width, newState.height);
+      const stillOnGround = tiles.some(t => isTileSolid(tileGrid, t.x, t.y, solidTypes));
+      if (!stillOnGround) {
+        newState.grounded = false;
+      }
     }
   }
   
   return newState;
+}
+
+// Check if character collides with a specific tile
+// IMPORTANT: Slopes are NON-SOLID for regular collision detection!
+// They are handled separately in post-processing (slope snapping)
+function checkTileCollision(
+  state: PhysicsState,
+  tileGrid: string[][],
+  tileX: number,
+  tileY: number,
+  solidTypes: string[]
+): { collides: boolean; tileType: string } {
+  if (tileY < 0 || tileY >= tileGrid.length) return { collides: false, tileType: "" };
+  if (tileX < 0 || tileX >= tileGrid[0].length) return { collides: false, tileType: "" };
+  
+  const tileType = tileGrid[tileY][tileX];
+  if (!solidTypes.includes(tileType)) return { collides: false, tileType: "" };
+  
+  // Slopes are NON-SOLID for regular collision - handled in post-processing
+  if (SLOPE_TILES.includes(tileType)) {
+    return { collides: false, tileType: "" };
+  }
+  
+  // Regular solid tile - always collides
+  return { collides: true, tileType };
 }
 
 // Check collision and resolve (push character out of solid tiles)
@@ -374,8 +575,52 @@ function checkAndResolveCollision(
   const tileSize = PHYSICS.TILE_SIZE;
   
   for (const tile of tiles) {
-    if (isTileSolid(tileGrid, tile.x, tile.y, solidTypes)) {
-      // Collision! Resolve by pushing out
+    const collision = checkTileCollision(state, tileGrid, tile.x, tile.y, solidTypes);
+    
+    if (collision.collides) {
+      const tileLeft = tile.x * tileSize;
+      const tileTop = tile.y * tileSize;
+      
+      // Handle slope tiles differently
+      if (SLOPE_TILES.includes(collision.tileType)) {
+        // For slopes, push character up/down based on position on slope
+        const footX = state.x + state.width / 2;
+        const relX = footX - tileLeft;
+        const normalizedX = relX / tileSize;
+        
+        // Calculate where the slope surface is at this X position
+        // Surface Y = where the diagonal line is at this X
+        let slopeY: number;
+        switch (collision.tileType) {
+          case "slopeBL": // ◣ diagonal y=x, surface goes from top-left to bottom-right
+            slopeY = tileTop + normalizedX * tileSize;
+            break;
+          case "slopeBR": // ◢ diagonal y=1-x, surface goes from top-right to bottom-left
+            slopeY = tileTop + (1 - normalizedX) * tileSize;
+            break;
+          case "slopeUL": // ◤ diagonal y=1-x, surface goes from top-right to bottom-left
+            slopeY = tileTop + (1 - normalizedX) * tileSize;
+            break;
+          case "slopeUR": // ◥ diagonal y=x, surface goes from top-left to bottom-right
+            slopeY = tileTop + normalizedX * tileSize;
+            break;
+          default:
+            slopeY = tileTop;
+        }
+        
+        // Push character to stand on slope surface
+        if (collision.tileType === "slopeBL" || collision.tileType === "slopeBR") {
+          // Floor slopes - push up
+          state.y = slopeY - state.height;
+          return { collided: true, surfaceNormal: "DOWN", tileX: tile.x, tileY: tile.y };
+        } else {
+          // Ceiling slopes - push down
+          state.y = slopeY;
+          return { collided: true, surfaceNormal: "UP", tileX: tile.x, tileY: tile.y };
+        }
+      }
+      
+      // Regular solid tile - use normal collision resolution
       const normal = getSurfaceNormal(
         state.x, state.y, state.width, state.height,
         tile.x, tile.y, state.vx, state.vy

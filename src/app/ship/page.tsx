@@ -69,6 +69,11 @@ const COLORS = {
   desk: "#4444cc",
   shaft: "#1a1a4a",    // Vertical shafts (darker, passable)
   hallway: "#2a2a6a",  // Hallway floors
+  // Triangle slopes (45°) - named by which corner is solid
+  slopeBR: "#00aaaa",  // ◢ solid bottom-right (ramp going up-left)
+  slopeBL: "#00aaaa",  // ◣ solid bottom-left (ramp going up-right)
+  slopeUR: "#00aaaa",  // ◥ solid upper-right (ceiling ramp)
+  slopeUL: "#00aaaa",  // ◤ solid upper-left (ceiling ramp)
 };
 
 const TILE = 32;
@@ -185,24 +190,55 @@ function generateShipGrid(): CellType[][] {
   if (grid[9][12]) grid[9][12] = "desk";
   if (grid[9][13]) grid[9][13] = "desk";
   
+  // === TEST AREA: Triangle slopes in Hall-L2 / Rec Room area ===
+  // Single-tile slopes with wide platform (JP's tested layout)
+  // Platform at row 9, slopes connect to floor at row 10
+  
+  // Left slope up (◢ slopeBR = walk up going right)
+  grid[9][15] = "slopeBR";
+  
+  // Wide platform at row 9
+  for (let x = 16; x <= 23; x++) {
+    grid[9][x] = "floor";
+  }
+  
+  // Right slope down (◣ slopeBL = walk down going right)
+  grid[9][24] = "slopeBL";
+  
   return grid;
 }
 
-const shipGrid = generateShipGrid();
+// Initial grid generated once (now managed by state in component)
 
 // Solid tile types for collision
-const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk"];
+const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk", "slopeBR", "slopeBL", "slopeUR", "slopeUL"];
+
+// Editable tile types for the brush
+const EDIT_TILES = ["interior", "floor", "slopeBR", "slopeBL", "slopeUR", "slopeUL", "hull"];
 
 export default function ShipPage() {
   const [showGrid, setShowGrid] = useState(true);
   const [viewX, setViewX] = useState(0);
   const [viewY, setViewY] = useState(0);
+  const [zoom, setZoom] = useState(1); // 1 = normal, <1 = zoomed out, >1 = zoomed in
+  const [cameraEnabled, setCameraEnabled] = useState(true); // Toggle camera follow
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Tile editor state
+  const [editMode, setEditMode] = useState(false);
+  const [editBrush, setEditBrush] = useState("floor");
+  const [grid, setGrid] = useState(() => generateShipGrid());
+  const gridRef = useRef(grid);
+  
+  // Keep gridRef in sync with grid state (so physics loop sees updates)
+  useEffect(() => {
+    gridRef.current = grid;
+  }, [grid]);
   
   // Nimbus physics state
   const [charPhysics, setCharPhysics] = useState<PhysicsState>({
-    x: 10 * TILE,
-    y: 3 * TILE,  // Start slightly above floor
+    x: 19 * TILE,  // Start near Rec Room slopes for testing
+    y: 9 * TILE,   // On lower deck floor
     vx: 0,
     vy: 0,
     gravity: "DOWN",
@@ -210,6 +246,7 @@ export default function ShipPage() {
     width: 32,  // Collision box smaller than sprite
     height: 44,
     jumpHeld: false,  // For jump edge detection
+    onSlope: false,   // Track if on slope (stair dilemma fix)
   });
   const [charDir, setCharDir] = useState<"left" | "right">("right");
   const [charAnim, setCharAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
@@ -298,7 +335,7 @@ export default function ShipPage() {
       };
       
       setCharPhysics(state => {
-        const newState = updatePhysics(state, input, shipGrid, SOLID_TILES);
+        const newState = updatePhysics(state, input, gridRef.current, SOLID_TILES);
         
         // Update facing direction based on GRAVITY-RELATIVE lateral velocity
         // "right" means moving in the positive lateral direction relative to current gravity
@@ -322,8 +359,64 @@ export default function ShipPage() {
       });
     }, 16);
     
-    return () => clearInterval(physicsLoop);
-  }, []);
+    // Smart camera system - runs alongside physics
+    const cameraLoop = setInterval(() => {
+      if (!cameraEnabled) return;
+      
+      setCharPhysics(charState => {
+        // Get all character positions
+        const characters = [
+          { x: charState.x, y: charState.y },
+        ];
+        
+        // Add Codex position (need to access via closure - we'll update this below)
+        setCodexX(cx => {
+          setCodexY(cy => {
+            characters.push({ x: cx, y: cy });
+            
+            // Calculate bounding box of all characters
+            const minX = Math.min(...characters.map(c => c.x));
+            const maxX = Math.max(...characters.map(c => c.x));
+            const minY = Math.min(...characters.map(c => c.y));
+            const maxY = Math.max(...characters.map(c => c.y));
+            
+            // Center point
+            const centerX = (minX + maxX) / 2 / TILE;
+            const centerY = (minY + maxY) / 2 / TILE;
+            
+            // Calculate required zoom to fit all characters
+            const spreadX = (maxX - minX) / TILE + 4; // Add padding
+            const spreadY = (maxY - minY) / TILE + 4;
+            const requiredZoomX = VIEW_W / Math.max(spreadX, VIEW_W);
+            const requiredZoomY = VIEW_H / Math.max(spreadY, VIEW_H);
+            const targetZoom = Math.min(requiredZoomX, requiredZoomY, 1.5); // Cap max zoom
+            const clampedZoom = Math.max(0.5, Math.min(1.5, targetZoom)); // Limit zoom range
+            
+            // Calculate view position to center on characters
+            const effectiveViewW = VIEW_W / clampedZoom;
+            const effectiveViewH = VIEW_H / clampedZoom;
+            const targetViewX = Math.max(0, Math.min(SHIP_W - effectiveViewW, centerX - effectiveViewW / 2));
+            const targetViewY = Math.max(0, Math.min(SHIP_H - effectiveViewH, centerY - effectiveViewH / 2));
+            
+            // Smooth lerp for camera
+            setViewX(vx => vx + (targetViewX - vx) * 0.08);
+            setViewY(vy => vy + (targetViewY - vy) * 0.08);
+            setZoom(z => z + (clampedZoom - z) * 0.05);
+            
+            return cy; // Don't modify
+          });
+          return cx; // Don't modify
+        });
+        
+        return charState; // Don't modify
+      });
+    }, 32); // Camera updates at 30fps
+    
+    return () => {
+      clearInterval(physicsLoop);
+      clearInterval(cameraLoop);
+    };
+  }, [cameraEnabled]);
   
   // Smooth rotation animation when gravity changes
   useEffect(() => {
@@ -517,10 +610,15 @@ export default function ShipPage() {
   const codexVisible = codexScreenX > -48 && codexScreenX < VIEW_W * TILE &&
                        codexScreenY > -48 && codexScreenY < VIEW_H * TILE;
 
-  // Get visible portion of grid
-  const visibleGrid = shipGrid
-    .slice(viewY, viewY + VIEW_H)
-    .map(row => row.slice(viewX, viewX + VIEW_W));
+  // Get visible portion of grid (account for zoom - show more tiles when zoomed out)
+  const effectiveViewW = Math.ceil(VIEW_W / zoom) + 1;
+  const effectiveViewH = Math.ceil(VIEW_H / zoom) + 1;
+  const viewXInt = Math.floor(viewX);
+  const viewYInt = Math.floor(viewY);
+  
+  const visibleGrid = grid
+    .slice(viewYInt, viewYInt + effectiveViewH)
+    .map(row => row.slice(viewXInt, viewXInt + effectiveViewW));
 
   // Get room labels that are visible
   const visibleRooms = rooms.filter(room => 
@@ -555,15 +653,58 @@ export default function ShipPage() {
         >
           GRID {showGrid ? "ON" : "OFF"}
         </button>
+        <button
+          onClick={() => setCameraEnabled(c => !c)}
+          style={{
+            padding: "4px 8px",
+            background: cameraEnabled ? "#0ff" : "#333",
+            color: cameraEnabled ? "#000" : "#fff",
+            border: "1px solid #0ff",
+            cursor: "pointer",
+          }}
+        >
+          CAM {cameraEnabled ? "ON" : "OFF"}
+        </button>
+        <button
+          onClick={() => setEditMode(e => !e)}
+          style={{
+            padding: "4px 8px",
+            background: editMode ? "#f0f" : "#333",
+            color: editMode ? "#000" : "#fff",
+            border: "1px solid #f0f",
+            cursor: "pointer",
+          }}
+        >
+          EDIT {editMode ? "ON" : "OFF"}
+        </button>
+        {editMode && (
+          <select
+            value={editBrush}
+            onChange={(e) => setEditBrush(e.target.value)}
+            style={{
+              padding: "4px",
+              background: "#222",
+              color: "#fff",
+              border: `2px solid ${COLORS[editBrush as keyof typeof COLORS] || "#fff"}`,
+            }}
+          >
+            {EDIT_TILES.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
         <span style={{ color: "#666", alignSelf: "center" }}>
-          WASD move | Space = flip gravity | Arrows = scroll
+          {editMode ? "Click tiles to paint" : "WASD move | Space = jump | Arrows = scroll"}
+        </span>
+        <span style={{ color: "#0ff", alignSelf: "center" }}>
+          Zoom: {zoom.toFixed(2)}x
         </span>
         <span style={{ 
           color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
           alignSelf: "center",
           marginLeft: 10,
         }}>
-          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}
+          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}{charPhysics.onSlope ? " | 📐 Slope" : ""}
         </span>
       </div>
 
@@ -580,11 +721,48 @@ export default function ShipPage() {
         }}
         tabIndex={0}
       >
+        {/* Zoomed content wrapper */}
+        <div style={{
+          transform: `scale(${zoom})`,
+          transformOrigin: "top left",
+          width: `${100 / zoom}%`,
+          height: `${100 / zoom}%`,
+        }}>
+        {/* Tile grid with sub-pixel offset for smooth scrolling */}
+        <div style={{
+          position: "absolute",
+          transform: `translate(${-(viewX % 1) * TILE}px, ${-(viewY % 1) * TILE}px)`,
+        }}>
         {/* Render visible cells */}
         {visibleGrid.map((row, vy) => (
-          row.map((cell, vx) => (
+          row.map((cell, vx) => {
+            // Triangle clip paths for slope tiles (horizontally flipped)
+            const clipPaths: Record<string, string> = {
+              slopeBL: "polygon(0% 100%, 100% 100%, 0% 0%)",   // ◣ walk up going right
+              slopeBR: "polygon(100% 100%, 0% 100%, 100% 0%)", // ◢ walk down going right
+              slopeUL: "polygon(0% 0%, 100% 0%, 0% 100%)",     // ◤ ceiling slope
+              slopeUR: "polygon(100% 0%, 0% 0%, 100% 100%)",   // ◥ ceiling slope
+            };
+            const clipPath = clipPaths[cell] || undefined;
+            
+            // Calculate actual grid position
+            const gridX = viewXInt + vx;
+            const gridY = viewYInt + vy;
+            
+            return (
             <div
               key={`${vx}-${vy}`}
+              onClick={() => {
+                if (!editMode) return;
+                // Paint tile with current brush
+                setGrid(prev => {
+                  const newGrid = prev.map(r => [...r]);
+                  if (gridY >= 0 && gridY < newGrid.length && gridX >= 0 && gridX < newGrid[0].length) {
+                    newGrid[gridY][gridX] = editBrush as keyof typeof COLORS;
+                  }
+                  return newGrid;
+                });
+              }}
               style={{
                 position: "absolute",
                 left: vx * TILE,
@@ -594,10 +772,15 @@ export default function ShipPage() {
                 background: COLORS[cell],
                 boxSizing: "border-box",
                 border: showGrid ? "1px solid rgba(255,255,255,0.1)" : "none",
+                clipPath,
+                cursor: editMode ? "crosshair" : "default",
               }}
             />
-          ))
+          );
+          })
         ))}
+        </div>
+        {/* End tile grid container */}
 
         {/* Room labels */}
         {visibleRooms.map(room => {
@@ -658,6 +841,7 @@ export default function ShipPage() {
             }}
           />
         )}
+        </div>{/* End zoomed content wrapper */}
       </div>
 
       {/* Minimap */}
@@ -671,7 +855,7 @@ export default function ShipPage() {
           border: "1px solid #333",
         }}>
           {/* Mini cells */}
-          {shipGrid.map((row, y) => (
+          {grid.map((row, y) => (
             row.map((cell, x) => (
               <div
                 key={`m-${x}-${y}`}
