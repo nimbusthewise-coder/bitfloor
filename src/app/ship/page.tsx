@@ -194,7 +194,7 @@ const shipGrid = generateShipGrid();
 const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk"];
 
 export default function ShipPage() {
-  const [showGrid, setShowGrid] = useState(true);
+  const [showGrid, setShowGrid] = useState(false);  // Default off for cleaner look
   const [viewX, setViewX] = useState(0);  // Now float for smooth scrolling
   const [viewY, setViewY] = useState(0);
   const [cameraEnabled, setCameraEnabled] = useState(true);
@@ -609,9 +609,10 @@ export default function ShipPage() {
         <span style={{ 
           color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
           alignSelf: "center",
-          marginLeft: "auto",  // Push to right side - no layout shift
+          marginLeft: "auto",
+          whiteSpace: "nowrap",  // Prevent wrapping
         }}>
-          Gravity: {charPhysics.gravity} | {charPhysics.grounded ? "🦶 Grounded" : "🪂 Airborne"}
+          {charPhysics.gravity} | {charPhysics.grounded ? "🦶" : "🪂"}
         </span>
       </div>
 
