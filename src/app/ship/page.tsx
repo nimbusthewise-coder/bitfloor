@@ -210,13 +210,15 @@ export default function ShipPage() {
   const cameraVelRef = useRef({ x: 0, y: 0 });
   
   // Nimbus physics state
+  // Floor at y=5 means collision box bottom should be at y=5*TILE=160
+  // Collision box is 44 tall, so top = 160 - 44 = 116 = ~3.625 tiles
   const [charPhysics, setCharPhysics] = useState<PhysicsState>({
-    x: 10 * TILE,
-    y: 4 * TILE,  // Start on floor (y=4 is one above floor at y=5)
+    x: 10 * TILE,  // Start in Bridge
+    y: 5 * TILE - 44,   // Position so feet touch floor at y=5
     vx: 0,
     vy: 0,
     gravity: "DOWN",
-    grounded: false,
+    grounded: true,  // Start grounded
     width: 32,  // Collision box smaller than sprite
     height: 44,
     jumpHeld: false,  // For jump edge detection
@@ -227,13 +229,15 @@ export default function ShipPage() {
   const [displayRotation, setDisplayRotation] = useState(0); // Animated rotation (degrees)
   
   // Codex physics state (AI-controlled, same physics as Nimbus)
+  // Floor at y=5 means collision box bottom should be at y=5*TILE=160
+  // Collision box is 44 tall, so top = 160 - 44 = 116 = ~3.625 tiles
   const [codexPhysics, setCodexPhysics] = useState<PhysicsState>({
-    x: 20 * TILE,  // Start in quarters
-    y: 4 * TILE,   // On floor (y=4 is one above floor at y=5)
+    x: 13 * TILE,  // Start in Bridge, to the right of Nimbus (x=10)
+    y: 5 * TILE - 44,   // Position so feet touch floor at y=5
     vx: 0,
     vy: 0,
     gravity: "DOWN",
-    grounded: false,
+    grounded: true,  // Start grounded to prevent fall-through
     width: 32,
     height: 44,
     jumpHeld: false,
@@ -246,9 +250,29 @@ export default function ShipPage() {
   // AI input state (what the AI "wants" to do this frame)
   const codexInputRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
   
+  // Refs for AI to access latest physics state (avoids stale closure issue)
+  const codexPhysicsRef = useRef(codexPhysics);
+  const charPhysicsRef = useRef(charPhysics);
+  codexPhysicsRef.current = codexPhysics;
+  charPhysicsRef.current = charPhysics;
+  
   // Path visualization
   const [codexPath, setCodexPath] = useState<PathStep[]>([]);
   const [showPaths, setShowPaths] = useState(true);
+  
+  // Debug: tile position visualization
+  const [debugTiles, setDebugTiles] = useState<{
+    nimbus: { x: number; y: number; centerX: number; centerY: number; floorX: number; floorY: number } | null;
+    codex: { x: number; y: number; centerX: number; centerY: number; floorX: number; floorY: number } | null;
+  }>({ nimbus: null, codex: null });
+  
+  // Debug command panel
+  const [commandResults, setCommandResults] = useState<{
+    name: string;
+    expected: string;
+    actual: string;
+    passed: boolean | null;
+  }[]>([]);
   
   // Sprite loading
   const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
@@ -500,35 +524,123 @@ export default function ShipPage() {
   // Codex AI - chase player using pathfinding
   const codexPathIndexRef = useRef(0);
   const lastPathTimeRef = useRef(0);
+  const codexLastPosRef = useRef({ x: 0, y: 0 });
+  const codexStuckCountRef = useRef(0);
   
   useEffect(() => {
     const aiInterval = setInterval(() => {
+      // Read latest physics from refs (avoids stale closure)
+      const codexPhysics = codexPhysicsRef.current;
+      const charPhysics = charPhysicsRef.current;
+      
+      // Safety: if Codex goes off the map, reset to near player
+      const BOUNDS_MARGIN = TILE * 2;
+      const outOfBounds = 
+        codexPhysics.x < -BOUNDS_MARGIN || 
+        codexPhysics.x > SHIP_W * TILE + BOUNDS_MARGIN ||
+        codexPhysics.y < -BOUNDS_MARGIN || 
+        codexPhysics.y > SHIP_H * TILE + BOUNDS_MARGIN;
+      
+      if (outOfBounds) {
+        console.log("[AI] Codex out of bounds! Resetting...");
+        // Reset Codex to spawn position
+        setCodexPhysics({
+          x: 13 * TILE,
+          y: 5 * TILE - 44,
+          vx: 0,
+          vy: 0,
+          gravity: "DOWN",
+          grounded: true,
+          width: 32,
+          height: 44,
+          jumpHeld: false,
+        });
+        setCodexPath([]);
+        codexPathIndexRef.current = 0;
+        return; // Skip this frame
+      }
+      
       // Recalculate path every 500ms
       const now = Date.now();
       if (now - lastPathTimeRef.current > 500) {
         lastPathTimeRef.current = now;
         
-        // Get standing tile position (use feet/bottom of collision box for DOWN gravity)
-        // For DOWN gravity: standing tile = floor tile - 1
-        // We calculate from collision box bottom (y + height) then go up one tile
-        const codexFootY = codexPhysics.y + codexPhysics.height;
-        const codexTileX = Math.floor(codexPhysics.x / TILE);
-        const codexTileY = Math.floor(codexFootY / TILE) - 1;  // Standing tile is above floor
+        // Get standing tile position - MUST account for current gravity!
+        // "Feet" position depends on which surface we're attached to
+        // Standing tile = the empty tile the character occupies, adjacent to the solid surface
+        const getStandingTile = (physics: PhysicsState) => {
+          const centerX = physics.x + physics.width / 2;
+          const centerY = physics.y + physics.height / 2;
+          
+          switch (physics.gravity) {
+            case "DOWN":  // Feet at bottom, standing on floor below
+              return {
+                x: Math.floor(centerX / TILE),
+                y: Math.floor((physics.y + physics.height - 1) / TILE)  // Tile containing feet
+              };
+            case "UP":    // Feet at top, standing on ceiling above
+              return {
+                x: Math.floor(centerX / TILE),
+                y: Math.floor(physics.y / TILE)  // Tile containing top of collision box
+              };
+            case "LEFT":  // Feet at left, standing on wall to left
+              return {
+                x: Math.floor(physics.x / TILE),  // Tile containing left edge
+                y: Math.floor(centerY / TILE)
+              };
+            case "RIGHT": // Feet at right, standing on wall to right
+              return {
+                x: Math.floor((physics.x + physics.width - 1) / TILE),  // Tile containing right edge
+                y: Math.floor(centerY / TILE)
+              };
+          }
+        };
         
-        const playerFootY = charPhysics.y + charPhysics.height;
-        const playerTileX = Math.floor(charPhysics.x / TILE);
-        const playerTileY = Math.floor(playerFootY / TILE) - 1;
+        const codexTile = getStandingTile(codexPhysics);
+        const playerTile = getStandingTile(charPhysics);
+        
+        // Update debug visualization
+        // Floor offset depends on gravity direction
+        const getFloorOffset = (gravity: string) => {
+          switch (gravity) {
+            case "DOWN": return { dx: 0, dy: 1 };
+            case "UP": return { dx: 0, dy: -1 };
+            case "LEFT": return { dx: -1, dy: 0 };
+            case "RIGHT": return { dx: 1, dy: 0 };
+            default: return { dx: 0, dy: 1 };
+          }
+        };
+        const nimbusFloor = getFloorOffset(charPhysics.gravity);
+        const codexFloor = getFloorOffset(codexPhysics.gravity);
+        
+        setDebugTiles({
+          nimbus: {
+            ...playerTile,
+            centerX: charPhysics.x + charPhysics.width / 2,
+            centerY: charPhysics.y + charPhysics.height / 2,
+            floorX: playerTile.x + nimbusFloor.dx,
+            floorY: playerTile.y + nimbusFloor.dy
+          },
+          codex: {
+            ...codexTile,
+            centerX: codexPhysics.x + codexPhysics.width / 2,
+            centerY: codexPhysics.y + codexPhysics.height / 2,
+            floorX: codexTile.x + codexFloor.dx,
+            floorY: codexTile.y + codexFloor.dy
+          }
+        });
         
         // Only pathfind if both characters are grounded (valid standing positions)
         if (codexPhysics.grounded && charPhysics.grounded) {
-          console.log("[Pathfinding] Codex:", { x: codexTileX, y: codexTileY, gravity: codexPhysics.gravity });
-          console.log("[Pathfinding] Player:", { x: playerTileX, y: playerTileY, gravity: charPhysics.gravity });
+          console.log("[Pathfinding] Codex:", { ...codexTile, gravity: codexPhysics.gravity },
+            "pixel:", Math.round(codexPhysics.x), Math.round(codexPhysics.y));
+          console.log("[Pathfinding] Player:", { ...playerTile, gravity: charPhysics.gravity });
           
           const path = findPath(
             shipGrid,
             SOLID_TILES as string[],
-            { x: codexTileX, y: codexTileY, gravity: codexPhysics.gravity as GravityDir },
-            { x: playerTileX, y: playerTileY }
+            { x: codexTile.x, y: codexTile.y, gravity: codexPhysics.gravity as GravityDir },
+            { x: playerTile.x, y: playerTile.y }
           );
           
           console.log("[Pathfinding] Result:", path ? `${path.length} steps` : "null");
@@ -536,6 +648,10 @@ export default function ShipPage() {
           if (path && path.length > 0) {
             setCodexPath(path);
             codexPathIndexRef.current = 1; // Start at step 1 (skip start position)
+          } else {
+            // Clear stale path if pathfinding fails - use direct pursuit instead
+            setCodexPath([]);
+            codexPathIndexRef.current = 0;
           }
         }
       }
@@ -543,39 +659,129 @@ export default function ShipPage() {
       // AI decision: look at current path step and decide input
       const input: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
       
-      if (codexPath.length > 0 && codexPathIndexRef.current < codexPath.length) {
-        const targetStep = codexPath[codexPathIndexRef.current];
-        const targetX = targetStep.node.x * TILE + TILE / 2;  // Center of target tile
-        const targetY = targetStep.node.y * TILE + TILE / 2;
-        const codexCenterX = codexPhysics.x + codexPhysics.width / 2;
-        const codexCenterY = codexPhysics.y + codexPhysics.height / 2;
+      // Calculate direct distance to player (used for fallback and stopping)
+      const codexCenterX = codexPhysics.x + codexPhysics.width / 2;
+      const codexCenterY = codexPhysics.y + codexPhysics.height / 2;
+      const playerCenterX = charPhysics.x + charPhysics.width / 2;
+      const playerCenterY = charPhysics.y + charPhysics.height / 2;
+      const directDx = playerCenterX - codexCenterX;
+      const directDy = playerCenterY - codexCenterY;
+      const directDist = Math.sqrt(directDx * directDx + directDy * directDy);
+      
+      // Stop if very close to player (within ~1.5 tiles)
+      const STOP_DISTANCE = TILE * 1.5;
+      
+      // When close to player, mark path as complete so we don't follow stale waypoints later
+      if (directDist <= STOP_DISTANCE && codexPath.length > 0) {
+        codexPathIndexRef.current = codexPath.length;  // Mark path as complete
+      }
+      
+      if (directDist > STOP_DISTANCE) {
+        // Use path if available and not completed
+        let targetX: number, targetY: number;
+        let shouldJump = false;
+        let needsGravityTransition = false;
+        
+        if (codexPath.length > 0 && codexPathIndexRef.current < codexPath.length) {
+          const targetStep = codexPath[codexPathIndexRef.current];
+          targetX = targetStep.node.x * TILE + TILE / 2;
+          targetY = targetStep.node.y * TILE + TILE / 2;
+          shouldJump = targetStep.action === "jump" || targetStep.action === "fall";
+          
+          const dx = targetX - codexCenterX;
+          const dy = targetY - codexCenterY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          // Check if next waypoint requires gravity change - but only jump if CLOSE to transition point!
+          // Otherwise we'd jump in place forever instead of walking toward the transition
+          if (targetStep.node.gravity !== codexPhysics.gravity && dist < TILE * 2) {
+            needsGravityTransition = true;
+          }
+          
+          // Check if we've reached this waypoint
+          if (dist < TILE / 2) {
+            codexPathIndexRef.current++;
+          }
+        } else {
+          // Fallback: move directly toward player
+          targetX = playerCenterX;
+          targetY = playerCenterY;
+        }
         
         const dx = targetX - codexCenterX;
         const dy = targetY - codexCenterY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
         
-        // Check if we've reached this waypoint
-        if (dist < TILE / 2) {
-          codexPathIndexRef.current++;
+        // Use SCREEN-RELATIVE input! The physics engine handles gravity conversion.
+        // If target is to the right on screen, press right. Physics does the rest.
+        // No need to use getMoveRightVector here - that caused double-inversion!
+        
+        // For floor/ceiling (UP/DOWN gravity): move left/right on screen
+        // For walls (LEFT/RIGHT gravity): move up/down on screen
+        let perpendicularDist = 0;
+        if (codexPhysics.gravity === "DOWN" || codexPhysics.gravity === "UP") {
+          // On floor or ceiling: lateral movement is left/right
+          if (dx > 4) input.right = true;
+          else if (dx < -4) input.left = true;
+          perpendicularDist = Math.abs(dy);  // Vertical is perpendicular
         } else {
-          // Determine input based on action and position
-          const action = targetStep.action;
-          
-          // For DOWN gravity: left/right are screen left/right
-          // For UP gravity: left/right are inverted
-          // The physics engine handles gravity-relative movement
-          if (codexPhysics.gravity === "DOWN" || codexPhysics.gravity === "UP") {
-            if (dx > 4) input.right = true;
-            else if (dx < -4) input.left = true;
-          } else {
-            // LEFT/RIGHT gravity: up/down become lateral
-            if (dy > 4) input.down = true;
-            else if (dy < -4) input.up = true;
+          // On wall: lateral movement is up/down
+          if (dy > 4) input.down = true;
+          else if (dy < -4) input.up = true;
+          perpendicularDist = Math.abs(dx);  // Horizontal is perpendicular
+        }
+        
+        // If target is far perpendicular (more than 2 tiles), need to jump off surface
+        const needsToLeaveSurface = perpendicularDist > TILE * 2;
+        
+        // Stuck detection: if trying to move but position hasn't changed
+        const lastPos = codexLastPosRef.current;
+        const posDelta = Math.abs(codexPhysics.x - lastPos.x) + Math.abs(codexPhysics.y - lastPos.y);
+        const isTryingToMove = input.left || input.right || input.up || input.down;
+        
+        if (isTryingToMove && posDelta < 1 && codexPhysics.grounded) {
+          codexStuckCountRef.current++;
+        } else {
+          codexStuckCountRef.current = 0;
+        }
+        
+        // Update last position
+        codexLastPosRef.current = { x: codexPhysics.x, y: codexPhysics.y };
+        
+        // Debug: log AI decision - more frequent for debugging
+        if (Math.random() < 0.1) {
+          const pathStep = codexPath[codexPathIndexRef.current];
+          const inputStr = [
+            input.left ? "L" : "", input.right ? "R" : "",
+            input.up ? "U" : "", input.down ? "D" : "",
+            input.jump ? "J" : ""
+          ].filter(Boolean).join("") || "-";
+          console.log("[AI]", codexPhysics.gravity,
+            "pos:", Math.round(codexCenterX), Math.round(codexCenterY),
+            "target:", Math.round(targetX), Math.round(targetY),
+            "dx:", dx.toFixed(0), "dy:", dy.toFixed(0),
+            "→ input:", inputStr,
+            pathStep ? `(path step ${codexPathIndexRef.current})` : "(direct)");
+        }
+        
+        // Jump if: path says jump, OR stuck, OR gravity transition, OR need to leave surface
+        const isStuck = codexStuckCountRef.current > 10;
+        const shouldTriggerJump = (shouldJump || isStuck || needsGravityTransition || needsToLeaveSurface) && codexPhysics.grounded;
+        
+        // Extra safety: don't jump if already near edge of map
+        const nearEdge = codexPhysics.x < TILE * 2 || codexPhysics.x > (SHIP_W - 2) * TILE ||
+                         codexPhysics.y < TILE * 2 || codexPhysics.y > (SHIP_H - 2) * TILE;
+        
+        if (shouldTriggerJump && !nearEdge) {
+          input.jump = true;
+          if (isStuck) {
+            console.log("[AI] Stuck! Jumping to clear obstacle");
+            codexStuckCountRef.current = 0;
           }
-          
-          // Jump if path says to jump (and we're grounded)
-          if (action === "jump" && codexPhysics.grounded) {
-            input.jump = true;
+          if (needsGravityTransition) {
+            console.log("[AI] Gravity transition needed:", codexPhysics.gravity, "→ jumping!");
+          }
+          if (needsToLeaveSurface) {
+            console.log("[AI] Target far perpendicular - jumping off surface! dist:", perpendicularDist.toFixed(0));
           }
         }
       }
@@ -586,7 +792,9 @@ export default function ShipPage() {
     }, 50); // AI runs at 20Hz
     
     return () => clearInterval(aiInterval);
-  }, [codexPath, codexPhysics.x, codexPhysics.y, codexPhysics.gravity, codexPhysics.grounded, charPhysics.x, charPhysics.y, charPhysics.grounded]);
+  // NOTE: Empty deps - interval reads current state via closure refresh pattern
+  // The setCodexPhysics/setCharPhysics in the game loop ensure fresh values
+  }, []);
   
   // Draw Nimbus
   useEffect(() => {
@@ -871,6 +1079,104 @@ export default function ShipPage() {
           </svg>
         )}
         
+        {/* Debug: Tile position visualization */}
+        {showPaths && (
+          <svg
+            style={{
+              position: "absolute",
+              left: -Math.floor(viewX) * TILE,
+              top: -Math.floor(viewY) * TILE,
+              width: SHIP_W * TILE,
+              height: SHIP_H * TILE,
+              pointerEvents: "none",
+              zIndex: 6,
+            }}
+          >
+            {/* Nimbus tile box (green) */}
+            {debugTiles.nimbus && (
+              <>
+                {/* Standing tile (dashed) */}
+                <rect
+                  x={debugTiles.nimbus.x * TILE}
+                  y={debugTiles.nimbus.y * TILE}
+                  width={TILE}
+                  height={TILE}
+                  fill="rgba(74, 222, 128, 0.1)"
+                  stroke="#4ade80"
+                  strokeWidth="2"
+                  strokeDasharray="4,2"
+                />
+                {/* Floor tile that must be solid (solid outline) */}
+                <rect
+                  x={debugTiles.nimbus.floorX * TILE + 4}
+                  y={debugTiles.nimbus.floorY * TILE + 4}
+                  width={TILE - 8}
+                  height={TILE - 8}
+                  fill="none"
+                  stroke="#4ade80"
+                  strokeWidth="3"
+                />
+                {/* Triangle at center */}
+                <polygon
+                  points={`${debugTiles.nimbus.centerX},${debugTiles.nimbus.centerY - 6} ${debugTiles.nimbus.centerX - 5},${debugTiles.nimbus.centerY + 4} ${debugTiles.nimbus.centerX + 5},${debugTiles.nimbus.centerY + 4}`}
+                  fill="#4ade80"
+                />
+                {/* Line from center to tile center */}
+                <line
+                  x1={debugTiles.nimbus.centerX}
+                  y1={debugTiles.nimbus.centerY}
+                  x2={debugTiles.nimbus.x * TILE + TILE/2}
+                  y2={debugTiles.nimbus.y * TILE + TILE/2}
+                  stroke="#4ade80"
+                  strokeWidth="1"
+                  strokeDasharray="2,2"
+                />
+              </>
+            )}
+            {/* Codex tile box (orange) */}
+            {debugTiles.codex && (
+              <>
+                {/* Standing tile (dashed) */}
+                <rect
+                  x={debugTiles.codex.x * TILE}
+                  y={debugTiles.codex.y * TILE}
+                  width={TILE}
+                  height={TILE}
+                  fill="rgba(251, 146, 60, 0.1)"
+                  stroke="#fb923c"
+                  strokeWidth="2"
+                  strokeDasharray="4,2"
+                />
+                {/* Floor tile that must be solid (solid outline) */}
+                <rect
+                  x={debugTiles.codex.floorX * TILE + 4}
+                  y={debugTiles.codex.floorY * TILE + 4}
+                  width={TILE - 8}
+                  height={TILE - 8}
+                  fill="none"
+                  stroke="#fb923c"
+                  strokeWidth="3"
+                />
+                {/* Triangle at center */}
+                <polygon
+                  points={`${debugTiles.codex.centerX},${debugTiles.codex.centerY - 6} ${debugTiles.codex.centerX - 5},${debugTiles.codex.centerY + 4} ${debugTiles.codex.centerX + 5},${debugTiles.codex.centerY + 4}`}
+                  fill="#fb923c"
+                />
+                {/* Line from center to tile center */}
+                <line
+                  x1={debugTiles.codex.centerX}
+                  y1={debugTiles.codex.centerY}
+                  x2={debugTiles.codex.x * TILE + TILE/2}
+                  y2={debugTiles.codex.y * TILE + TILE/2}
+                  stroke="#fb923c"
+                  strokeWidth="1"
+                  strokeDasharray="2,2"
+                />
+              </>
+            )}
+          </svg>
+        )}
+        
         {/* Nimbus (player) */}
         {charVisible && (
           <canvas
@@ -986,6 +1292,158 @@ export default function ShipPage() {
       <div style={{ marginTop: 15, color: "#666", fontSize: 8 }}>
         Ship: {SHIP_W}×{SHIP_H} tiles ({SHIP_W * TILE}×{SHIP_H * TILE}px) | 
         Viewport: {VIEW_W}×{VIEW_H} | Tile: {TILE}px
+      </div>
+
+      {/* Debug Command Panel */}
+      <div style={{ 
+        marginTop: 20, 
+        padding: 10, 
+        background: "#1a1a2e", 
+        border: "1px solid #333",
+        maxWidth: 400,
+      }}>
+        <div style={{ color: "#0ff", fontSize: 10, marginBottom: 10 }}>
+          CODEX DEBUG COMMANDS
+        </div>
+        <div style={{ color: "#666", fontSize: 8, marginBottom: 10 }}>
+          Codex: x={Math.round(codexPhysics.x)} y={Math.round(codexPhysics.y)} | 
+          gravity={codexPhysics.gravity} | grounded={codexPhysics.grounded ? "Y" : "N"}
+        </div>
+        
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+          {/* Test Move Left */}
+          <button
+            onClick={() => {
+              const startX = codexPhysics.x;
+              codexInputRef.current = { ...codexInputRef.current, left: true, right: false };
+              setTimeout(() => {
+                codexInputRef.current = { ...codexInputRef.current, left: false };
+                const endX = codexPhysics.x;
+                const moved = endX < startX;
+                setCommandResults(prev => [...prev.slice(-9), {
+                  name: "Move Left",
+                  expected: `x should decrease from ${Math.round(startX)}`,
+                  actual: `x is now ${Math.round(endX)}`,
+                  passed: moved,
+                }]);
+              }, 500);
+            }}
+            style={{ padding: "4px 8px", background: "#333", color: "#fff", border: "1px solid #666", cursor: "pointer", fontSize: 8 }}
+          >
+            ← Left
+          </button>
+          
+          {/* Test Move Right */}
+          <button
+            onClick={() => {
+              const startX = codexPhysics.x;
+              codexInputRef.current = { ...codexInputRef.current, right: true, left: false };
+              setTimeout(() => {
+                codexInputRef.current = { ...codexInputRef.current, right: false };
+                const endX = codexPhysics.x;
+                const moved = endX > startX;
+                setCommandResults(prev => [...prev.slice(-9), {
+                  name: "Move Right",
+                  expected: `x should increase from ${Math.round(startX)}`,
+                  actual: `x is now ${Math.round(endX)}`,
+                  passed: moved,
+                }]);
+              }, 500);
+            }}
+            style={{ padding: "4px 8px", background: "#333", color: "#fff", border: "1px solid #666", cursor: "pointer", fontSize: 8 }}
+          >
+            → Right
+          </button>
+          
+          {/* Test Jump */}
+          <button
+            onClick={() => {
+              const wasGrounded = codexPhysics.grounded;
+              codexInputRef.current = { ...codexInputRef.current, jump: true };
+              setTimeout(() => {
+                codexInputRef.current = { ...codexInputRef.current, jump: false };
+                const becameAirborne = !codexPhysics.grounded || codexPhysics.vy < 0;
+                setCommandResults(prev => [...prev.slice(-9), {
+                  name: "Jump",
+                  expected: wasGrounded ? "should become airborne" : "was already airborne",
+                  actual: codexPhysics.grounded ? "still grounded" : "airborne",
+                  passed: wasGrounded ? becameAirborne : true,
+                }]);
+              }, 200);
+            }}
+            style={{ padding: "4px 8px", background: "#333", color: "#fff", border: "1px solid #666", cursor: "pointer", fontSize: 8 }}
+          >
+            ↑ Jump
+          </button>
+          
+          {/* Reset Position */}
+          <button
+            onClick={() => {
+              setCodexPhysics({
+                x: 13 * TILE,
+                y: 5 * TILE - 44,
+                vx: 0,
+                vy: 0,
+                gravity: "DOWN",
+                grounded: true,
+                width: 32,
+                height: 44,
+                jumpHeld: false,
+              });
+              setCodexPath([]);
+              setCommandResults(prev => [...prev.slice(-9), {
+                name: "Reset",
+                expected: "Codex at spawn position",
+                actual: "Reset complete",
+                passed: true,
+              }]);
+            }}
+            style={{ padding: "4px 8px", background: "#660000", color: "#fff", border: "1px solid #f00", cursor: "pointer", fontSize: 8 }}
+          >
+            ⟲ Reset
+          </button>
+          
+          {/* Clear Path */}
+          <button
+            onClick={() => {
+              setCodexPath([]);
+              setCommandResults(prev => [...prev.slice(-9), {
+                name: "Clear Path",
+                expected: "Path cleared",
+                actual: `Cleared (was ${codexPath.length} steps)`,
+                passed: true,
+              }]);
+            }}
+            style={{ padding: "4px 8px", background: "#333", color: "#fff", border: "1px solid #666", cursor: "pointer", fontSize: 8 }}
+          >
+            ✕ Clear Path
+          </button>
+        </div>
+        
+        {/* Test Results */}
+        <div style={{ fontSize: 8 }}>
+          {commandResults.map((result, i) => (
+            <div 
+              key={i} 
+              style={{ 
+                padding: "3px 5px", 
+                marginBottom: 2,
+                background: result.passed ? "rgba(0,255,0,0.1)" : "rgba(255,0,0,0.1)",
+                borderLeft: `3px solid ${result.passed ? "#0f0" : "#f00"}`,
+              }}
+            >
+              <div style={{ color: result.passed ? "#0f0" : "#f00" }}>
+                {result.passed ? "✓" : "✗"} {result.name}
+              </div>
+              <div style={{ color: "#888" }}>
+                Expected: {result.expected}
+              </div>
+              <div style={{ color: "#aaa" }}>
+                Actual: {result.actual}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

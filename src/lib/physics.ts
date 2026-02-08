@@ -222,6 +222,7 @@ export function updatePhysics(
   const jumpVec = getJumpVector(state.gravity);
   
   // Only apply gravity when NOT grounded
+  // Gravity direction is maintained until hitting a new surface
   if (!state.grounded) {
     newState.vx += gravVec.x * GRAVITY;
     newState.vy += gravVec.y * GRAVITY;
