@@ -96,14 +96,14 @@ export function compositeFace(
   const canvas = document.createElement('canvas');
   canvas.width = outputSize;
   canvas.height = outputSize;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.imageSmoothingEnabled = false;
   
   // Temp canvas for tinting individual layers
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = outputSize;
   tempCanvas.height = outputSize;
-  const tempCtx = tempCanvas.getContext('2d')!;
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true })!;
   tempCtx.imageSmoothingEnabled = false;
   
   const { image, tileSize, columns } = faceSheet;
@@ -311,7 +311,7 @@ export function bakeIdentitySprites(
   const canvas = document.createElement('canvas');
   canvas.width = size.w;
   canvas.height = size.h;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.imageSmoothingEnabled = false;
   
   // Get unique frame positions (for compositing layers)
@@ -335,14 +335,14 @@ export function bakeIdentitySprites(
   const offscreen = document.createElement('canvas');
   offscreen.width = 48;
   offscreen.height = 48;
-  const offCtx = offscreen.getContext('2d')!;
+  const offCtx = offscreen.getContext('2d', { willReadFrequently: true })!;
   offCtx.imageSmoothingEnabled = false;
   
   // Temp canvas for tinting individual layers
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = 48;
   tempCanvas.height = 48;
-  const tempCtx = tempCanvas.getContext('2d')!;
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true })!;
   tempCtx.imageSmoothingEnabled = false;
   
   // We need to draw each complete frame

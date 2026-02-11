@@ -5,7 +5,10 @@
  * Includes chained jumps, gravity changes, and closest-point fallback.
  */
 
-import { PHYSICS, getMoveRightVector, getGravityVector, GravityDirection } from "./physics";
+import { PHYSICS, PLAYER, getMoveRightVector, getGravityVector, GravityDirection } from "./physics";
+
+// AABB helpers for walk viability checks (must match real collider footprint)
+const COLLIDER = PLAYER.COLLIDER_SIZE;
 
 export type PhysGravity = "DOWN" | "UP" | "LEFT" | "RIGHT";
 
@@ -22,6 +25,11 @@ export interface JumpResult {
   start: { x: number; y: number; gravity: PhysGravity };
   trajectory: Array<{ x: number; y: number; frame: number }>;
   landing: { x: number; y: number; gravity: PhysGravity } | null;
+
+  // Analog lateral input used during simulation/execution (gravity-relative).
+  // Range [-1..+1]. Critical for making runtime execution match the planned yellow arc.
+  lateral: number;
+
   action: string;
   cost: number;
 }
@@ -59,6 +67,57 @@ function pixelToCell(x: number, y: number): { x: number; y: number } {
     x: Math.floor(x / TILE),
     y: Math.floor(y / TILE)
   };
+}
+
+function aabbOverlapsSolidAtCenter(
+  cx: number,
+  cy: number,
+  grid: string[][],
+  solidTypes: string[]
+): boolean {
+  const w = COLLIDER;
+  const h = COLLIDER;
+  const left = cx - w / 2;
+  const top = cy - h / 2;
+
+  const startX = Math.floor(left / TILE);
+  const endX = Math.floor((left + w - 1) / TILE);
+  const startY = Math.floor(top / TILE);
+  const endY = Math.floor((top + h - 1) / TILE);
+
+  for (let ty = startY; ty <= endY; ty++) {
+    for (let tx = startX; tx <= endX; tx++) {
+      if (ty < 0 || ty >= grid.length || tx < 0 || tx >= grid[0].length) return true;
+      if (solidTypes.includes(grid[ty][tx])) return true;
+    }
+  }
+  return false;
+}
+
+function hasSupportAtCenter(
+  cx: number,
+  cy: number,
+  gravity: PhysGravity,
+  grid: string[][],
+  solidTypes: string[]
+): boolean {
+  const gv = getGravVec(gravity);
+  const mr = getMoveRightVector(gravity as any);
+
+  // Probe a few points along the collider's gravity-facing edge.
+  // This is much closer to how the real collider can be "partially" supported,
+  // and avoids false negatives in tight gaps/notches.
+  const edgeDist = COLLIDER / 2 + 1;
+  const span = COLLIDER / 2 - 2;
+  const samples = [-span, 0, span];
+
+  for (const t of samples) {
+    const px = cx + gv.x * edgeDist + mr.x * t;
+    const py = cy + gv.y * edgeDist + mr.y * t;
+    const c = pixelToCell(px, py);
+    if (isSolid(grid, c.x, c.y, solidTypes)) return true;
+  }
+  return false;
 }
 
 // Check if solid
@@ -199,6 +258,7 @@ function simulateJump(
           start: { x: startCell.x, y: startCell.y, gravity },
           trajectory,
           landing: { x: landingCell.x, y: landingCell.y, gravity: newGravity },
+          lateral: lateralInput,
           action: lateralInput === 0 ? "jump" : lateralInput < 0 ? "jump-left" : "jump-right",
           cost: frame
         };
@@ -316,9 +376,9 @@ export function calculateReachableCells(
     
     // Check walking left
     const leftDest = laterals.left;
-    const leftFloor = getFloorCell(leftDest.x, leftDest.y, current.gravity);
-    if (isEmpty(grid, leftDest.x, leftDest.y, solidTypes) && 
-        isSolid(grid, leftFloor.x, leftFloor.y, solidTypes)) {
+    const leftCenter = cellToPixel(leftDest.x, leftDest.y, current.gravity);
+    if (!aabbOverlapsSolidAtCenter(leftCenter.x, leftCenter.y, grid, solidTypes) &&
+        hasSupportAtCenter(leftCenter.x, leftCenter.y, current.gravity, grid, solidTypes)) {
       const key = `${leftDest.x},${leftDest.y},${current.gravity}`;
       const newCost = current.cost + 8; // Walking cost (slightly lower than 10 to encourage it)
       const existingCost = bestCost.get(key);
@@ -335,6 +395,7 @@ export function calculateReachableCells(
             start: { x: current.x, y: current.y, gravity: current.gravity },
             trajectory: [],
             landing: { x: leftDest.x, y: leftDest.y, gravity: current.gravity },
+            lateral: -1,
             action: "walk-left",
             cost: 8
           }]
@@ -344,9 +405,9 @@ export function calculateReachableCells(
     
     // Check walking right
     const rightDest = laterals.right;
-    const rightFloor = getFloorCell(rightDest.x, rightDest.y, current.gravity);
-    if (isEmpty(grid, rightDest.x, rightDest.y, solidTypes) && 
-        isSolid(grid, rightFloor.x, rightFloor.y, solidTypes)) {
+    const rightCenter = cellToPixel(rightDest.x, rightDest.y, current.gravity);
+    if (!aabbOverlapsSolidAtCenter(rightCenter.x, rightCenter.y, grid, solidTypes) &&
+        hasSupportAtCenter(rightCenter.x, rightCenter.y, current.gravity, grid, solidTypes)) {
       const key = `${rightDest.x},${rightDest.y},${current.gravity}`;
       const newCost = current.cost + 8; // Walking cost
       const existingCost = bestCost.get(key);
@@ -363,6 +424,7 @@ export function calculateReachableCells(
             start: { x: current.x, y: current.y, gravity: current.gravity },
             trajectory: [],
             landing: { x: rightDest.x, y: rightDest.y, gravity: current.gravity },
+            lateral: 1,
             action: "walk-right",
             cost: 8
           }]

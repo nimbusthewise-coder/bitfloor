@@ -382,6 +382,22 @@ export default function ShipPage() {
   const nimPathProgressRef = useRef(0);
   const nimLastPathCalcTimeRef = useRef(0);
   const nimInputRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
+
+  // Stabilize planning when the true destination is unreachable or equally-good subgoals exist.
+  // Prevents Nim from oscillating (walk-left then walk-right forever).
+  const nimPlanMetaRef = useRef<{
+    destKey: string | null;
+    bestKey: string | null;
+    minDist: number;
+    cost: number;
+  }>({ destKey: null, bestKey: null, minDist: Infinity, cost: Infinity });
+
+  // Prevent infinite "walk" loops where the plan says walk but physics blocks motion.
+  const nimWalkStuckRef = useRef<{ count: number; lastCx: number; lastCy: number }>({
+    count: 0,
+    lastCx: 0,
+    lastCy: 0,
+  });
   
   // Nim baked sprites
   const [nimBaked, setNimBaked] = useState<BakedSprite | null>(null);
@@ -1136,6 +1152,7 @@ export default function ShipPage() {
           nimDestKeyRef.current = destKey;
           nimCurrentPathRef.current = [];
           nimPathProgressRef.current = 0;
+          nimPlanMetaRef.current = { destKey, bestKey: null, minDist: Infinity, cost: Infinity };
         }
         // Only recalculate path if we have NO path (not while actively walking/jumping)
         const hasActivePath = nimCurrentPathRef.current.length > 0 && 
@@ -1155,22 +1172,65 @@ export default function ShipPage() {
             SOLID_TILES as string[]
           );
           
-          // Find best path to destination
-          let bestCell = null;
+          // Find best path to destination (deterministic tie-break + stickiness).
+          const keyOf = (c: any) => `${c.x},${c.y},${c.gravity}`;
+
+          let bestCell: any = null;
+          let bestKey: string | null = null;
           let minDist = Infinity;
+          let bestCost = Infinity;
+          let bestPathLen = Infinity;
+
           for (const cell of reachable) {
             const dist = Math.abs(cell.x - dest.x) + Math.abs(cell.y - dest.y);
-            if (dist < minDist) {
-              minDist = dist;
+            const cost = typeof cell.cost === "number" ? cell.cost : Infinity;
+            const pathLen = Array.isArray(cell.path) ? cell.path.length : Infinity;
+            const k = keyOf(cell);
+
+            const better =
+              dist < minDist ||
+              (dist === minDist && cost < bestCost) ||
+              (dist === minDist && cost === bestCost && pathLen < bestPathLen) ||
+              (dist === minDist && cost === bestCost && pathLen === bestPathLen && (bestKey === null || k < bestKey));
+
+            if (better) {
               bestCell = cell;
+              bestKey = k;
+              minDist = dist;
+              bestCost = cost;
+              bestPathLen = pathLen;
             }
           }
-          
-          if (bestCell && bestCell.path.length > 0) {
-            // Always adopt the plan for the current destination (dest changes are handled above)
-            nimCurrentPathRef.current = bestCell.path;
+
+          const meta = nimPlanMetaRef.current;
+          const sameDest = meta.destKey === destKey;
+
+          // Only switch subgoals if the new one is strictly better.
+          // Otherwise keep the previous bestKey if it's still reachable to prevent oscillation.
+          const switchAllowed =
+            !sameDest ||
+            minDist < meta.minDist ||
+            (minDist === meta.minDist && bestCost < meta.cost) ||
+            (meta.bestKey === null);
+
+          let chosenCell = bestCell;
+          let chosenKey = bestKey;
+
+          if (!switchAllowed && sameDest && meta.bestKey) {
+            const stable = reachable.find((c: any) => keyOf(c) === meta.bestKey);
+            if (stable) {
+              chosenCell = stable;
+              chosenKey = meta.bestKey;
+              minDist = Math.abs(stable.x - dest.x) + Math.abs(stable.y - dest.y);
+              bestCost = typeof stable.cost === "number" ? stable.cost : Infinity;
+            }
+          }
+
+          if (chosenCell && chosenCell.path.length > 0) {
+            nimCurrentPathRef.current = chosenCell.path;
             nimPathProgressRef.current = 0;
-            if (nimDebug) console.log("[NimDBG] planned", { actions: bestCell.path.length, minDist });
+            nimPlanMetaRef.current = { destKey, bestKey: chosenKey, minDist, cost: bestCost };
+            if (nimDebug) console.log("[NimDBG] planned", { actions: chosenCell.path.length, minDist, cost: bestCost, bestKey: chosenKey });
           } else {
             if (nimDebug) console.log("[NimDBG] noPlan", { reachable: reachable.length, minDist });
           }
@@ -1205,13 +1265,17 @@ export default function ShipPage() {
           if (nimDebug) {
             const i = Math.floor(nimPathProgressRef.current);
             const a = nimCurrentPathRef.current[i];
-            console.log("[NimDBG] exec", { index: i, action: a?.action, start: a?.start, landing: a?.landing });
+            console.log("[NimDBG] exec", { index: i, pathLen: nimCurrentPathRef.current.length, progress: nimPathProgressRef.current.toFixed(2), grav: nimPhys.gravity, grounded: nimPhys.grounded, action: a?.action, lateral: (a as any)?.lateral, start: a?.start, landing: a?.landing });
           }
           const nimProgress = nimPathProgressRef.current;
           const nimJumpIndex = Math.floor(nimProgress);
           const nimIsMidJump = nimProgress % 1 === 0.5;
-          
-          if (nimJumpIndex < nimCurrentPathRef.current.length) {
+
+          // Safety: if progress points past the plan, clear it so we can replan next tick.
+          if (nimJumpIndex >= nimCurrentPathRef.current.length) {
+            nimCurrentPathRef.current = [];
+            nimPathProgressRef.current = 0;
+          } else {
             const nimAction = nimCurrentPathRef.current[nimJumpIndex];
             const nimGrav = nimPhys.gravity;
             
@@ -1258,58 +1322,52 @@ export default function ShipPage() {
                   // Reached or passed the end of the merged walk — skip all walked steps
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
-                  // Keep walking toward the final target
-                  if (walkDir === "walk-left") {
-                    if (nimGrav === "DOWN") nimInput.left = true;
-                    else if (nimGrav === "UP") nimInput.right = true;
-                    else if (nimGrav === "LEFT") nimInput.up = true;
-                    else if (nimGrav === "RIGHT") nimInput.down = true;
-                  } else {
-                    if (nimGrav === "DOWN") nimInput.right = true;
-                    else if (nimGrav === "UP") nimInput.left = true;
-                    else if (nimGrav === "LEFT") nimInput.down = true;
-                    else if (nimGrav === "RIGHT") nimInput.up = true;
+                  // Keep walking toward the final target.
+                  // Use analog lateral axis so execution matches the planner's gravity-relative notion of left/right.
+                  nimInput.lateral = walkDir === "walk-left" ? -1 : 1;
+
+                  // Stuck detection: if we're issuing walk but not moving, clear the plan so we can replan.
+                  const stuck = nimWalkStuckRef.current;
+                  const d = Math.abs(nimCenterX - stuck.lastCx) + Math.abs(nimCenterY - stuck.lastCy);
+                  if (d < 0.5) stuck.count += 1;
+                  else stuck.count = 0;
+                  stuck.lastCx = nimCenterX;
+                  stuck.lastCy = nimCenterY;
+
+                  if (stuck.count >= 4) {
+                    // If we're very close, snap to the intended end of this merged walk.
+                    if (Math.abs(lateralDelta) < TILE * 0.9) {
+                      const w = nimPhys.width;
+                      const h = nimPhys.height;
+                      nimPhysicsRef.current.x = finalTargetX - w / 2;
+                      nimPhysicsRef.current.y = finalTargetY - h / 2;
+                      nimPhysicsRef.current.vx = 0;
+                      nimPhysicsRef.current.vy = 0;
+                      nimPathProgressRef.current = walkEndIndex + 1;
+                    } else {
+                      nimCurrentPathRef.current = [];
+                      nimPathProgressRef.current = 0;
+                    }
+                    stuck.count = 0;
                   }
                 }
               } else if (nimAction.action.startsWith("jump")) {
+                // Reset walk stuck counter when we transition into a jump
+                nimWalkStuckRef.current.count = 0;
                 // Zero out lateral velocity before jumping so arc matches simulation
                 // (simulation assumes zero starting lateral speed)
                 const moveRight = getMoveRightVector(nimGrav);
                 const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
                 nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
                 nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
-                
-                // Apply lateral direction for the jump
-                if (nimAction.action === "jump-left") {
-                  if (nimGrav === "DOWN") nimInput.left = true;
-                  else if (nimGrav === "UP") nimInput.right = true;
-                  else if (nimGrav === "LEFT") nimInput.up = true;
-                  else if (nimGrav === "RIGHT") nimInput.down = true;
-                } else if (nimAction.action === "jump-right") {
-                  if (nimGrav === "DOWN") nimInput.right = true;
-                  else if (nimGrav === "UP") nimInput.left = true;
-                  else if (nimGrav === "LEFT") nimInput.down = true;
-                  else if (nimGrav === "RIGHT") nimInput.up = true;
-                }
-                // else: straight jump, no lateral input
+
+                // ANALOG EXECUTION: use the exact lateral axis value chosen by the planner.
+                // This makes the executed jump match the simulated yellow arc.
+                // (Value is gravity-relative: -1..+1 along moveRightVec.)
+                nimInput.lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
+
                 nimInput.jump = true;
                 nimPathProgressRef.current = nimJumpIndex + 0.5;
-              }
-            }
-          } else {
-            // Reached end of path — stop moving
-            nimCurrentPathRef.current = [];
-            nimPathProgressRef.current = 0;
-            // Check if we're at the destination
-            const nimTileX = Math.round(nimPhys.x / TILE);
-            const nimTileY = Math.round(nimPhys.y / TILE);
-            if (dest) {
-              // Compare using CENTER-of-collider tile (more stable than top-left rounding)
-              const centerTileX = Math.floor((nimPhys.x + nimPhys.width / 2) / TILE);
-              const centerTileY = Math.floor((nimPhys.y + nimPhys.height / 2) / TILE);
-              if (centerTileX === dest.x && centerTileY === dest.y) {
-                setNimDestination(null);
-                nimDestinationRef.current = null;
               }
             }
           }
@@ -2019,6 +2077,7 @@ export default function ShipPage() {
             // Update both React state (for UI) and ref (for AI loop) immediately
             nimDestinationRef.current = { x: tileX, y: tileY };
             nimDestKeyRef.current = null; // force-plan on next AI tick
+            nimPlanMetaRef.current = { destKey: null, bestKey: null, minDist: Infinity, cost: Infinity };
             setNimDestination({ x: tileX, y: tileY });
             nimCurrentPathRef.current = [];
             nimPathProgressRef.current = 0;

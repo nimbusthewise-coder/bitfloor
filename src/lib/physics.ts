@@ -168,6 +168,11 @@ export interface ScreenInput {
   left: boolean;   // A - toward left of screen
   right: boolean;  // D - toward right of screen
   jump: boolean;   // Space
+
+  // Optional: analog lateral axis relative to CURRENT GRAVITY.
+  // Range: [-1..+1], where -1 = full "left" (gravity-relative), +1 = full "right".
+  // If provided, it overrides left/right booleans for movement intent.
+  lateral?: number;
 }
 
 // Gravity-relative input (what the character perceives)
@@ -273,9 +278,16 @@ export function updatePhysics(
   // Calculate target lateral velocity (perpendicular to gravity)
   // -1 = full left, 0 = stop, +1 = full right
   let lateralIntent = 0;
-  if (relInput.left) lateralIntent -= 1;
-  if (relInput.right) lateralIntent += 1;
-  
+
+  // If we have an analog axis, use it (gravity-relative).
+  // Otherwise fall back to digital buttons.
+  if (typeof input.lateral === "number" && Number.isFinite(input.lateral)) {
+    lateralIntent = Math.max(-1, Math.min(1, input.lateral));
+  } else {
+    if (relInput.left) lateralIntent -= 1;
+    if (relInput.right) lateralIntent += 1;
+  }
+
   const targetLateralSpeed = lateralIntent * maxSpeed;
   
   // Get current lateral velocity (dot product with moveRight vector)
