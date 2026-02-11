@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   loadSpriteSheet,
   loadFaceSheet,
@@ -18,13 +18,23 @@ import {
   getGravityRotation,
   getMoveRightVector,
   PHYSICS,
+  PLAYER,
 } from "@/lib/physics";
 import {
-  findPath,
+  precomputeMovements,
+  createIncrementalSearch,
+  stepIncrementalSearch,
+  IncrementalSearchState,
   PathStep,
   GravityDir,
   canStand,
 } from "@/lib/pathfinding";
+import {
+  calculateReachableCells,
+  findClosestReachable,
+  getJumpTrajectories,
+  JumpResult,
+} from "@/lib/physics-pathfinding";
 
 // Character identities
 const nimbus: Identity = {
@@ -63,6 +73,25 @@ const codex: Identity = {
   speed: 1.2,
 };
 
+// Nim - Target character (pink/magenta)
+const nim: Identity = {
+  id: "nim",
+  name: "Nim",
+  faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
+  tints: {
+    Suit: "#ff00aa",
+    Gloves: "#ff1493",
+    Boots: "#c71585",
+    Helmet: "#ff69b4",
+  },
+  faceTints: {
+    skin: "#ffe4e1",
+    hair: "#ff1493",
+    background: "#ffb6c1",
+  },
+  speed: 1,
+};
+
 // Color palette
 const COLORS = {
   space: "#000000",
@@ -81,7 +110,7 @@ const TILE = 32;
 
 // Full ship dimensions (larger than viewport)
 const SHIP_W = 32; // 1024px total
-const SHIP_H = 16; // 512px total (2 decks × 5 tiles + hull)
+const SHIP_H = 16; // 512px total
 
 // Viewport dimensions  
 const VIEW_W = 20; // 640px visible
@@ -199,47 +228,62 @@ const shipGrid = generateShipGrid();
 // Solid tile types for collision
 const SOLID_TILES = ["hull", "hullLight", "floor", "console", "desk"];
 
+// Precompute pathfinding transitions once (ship grid is static)
+const movementMap = precomputeMovements(shipGrid, SOLID_TILES);
+
 export default function ShipPage() {
   const [showGrid, setShowGrid] = useState(false);  // Default off for cleaner look
-  const [viewX, setViewX] = useState(0);  // Now float for smooth scrolling
-  const [viewY, setViewY] = useState(0);
+  // CARGO RESCUE: Start camera focused on Cargo bay
+  const [viewX, setViewX] = useState(0);
+  const [viewY, setViewY] = useState(6);  // Focus on lower deck where Cargo is
   const [cameraEnabled, setCameraEnabled] = useState(true);
+
+  // rAF loop reads/writes these refs; React state is only for rendering/UI.
+  const viewXRef = useRef(viewX);
+  const viewYRef = useRef(viewY);
+  const cameraEnabledRef = useRef(cameraEnabled);
+
+  useEffect(() => { viewXRef.current = viewX; }, [viewX]);
+  useEffect(() => { viewYRef.current = viewY; }, [viewY]);
+  useEffect(() => { cameraEnabledRef.current = cameraEnabled; }, [cameraEnabled]);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Canvas for game rendering (60fps smooth, no React re-renders)
+  const gameCanvasRef = useRef<HTMLCanvasElement>(null);
   
   // Spring camera velocity (for smooth ease in-out)
   const cameraVelRef = useRef({ x: 0, y: 0 });
   
-  // Nimbus physics state
-  // Floor at y=5 means collision box bottom should be at y=5*TILE=160
-  // Collision box is 44 tall, so top = 160 - 44 = 116 = ~3.625 tiles
+  // Nimbus physics state (JP - Player)
+  // CARGO RESCUE: Start in Cargo bay with CODEX
   const [charPhysics, setCharPhysics] = useState<PhysicsState>({
-    x: 10 * TILE,  // Start in Bridge
-    y: 5 * TILE - 44,   // Position so feet touch floor at y=5
+    x: 3 * TILE,  // Cargo bay
+    y: 11 * TILE - PLAYER.COLLIDER_SIZE - 2,   // Floor at y=11 (Cargo deck) - raised 2px to avoid ground collision
     vx: 0,
     vy: 0,
     gravity: "DOWN",
-    grounded: true,  // Start grounded
-    width: 32,  // Collision box smaller than sprite
-    height: 44,
-    jumpHeld: false,  // For jump edge detection
+    grounded: true,
+    width: PLAYER.COLLIDER_SIZE,
+    height: PLAYER.COLLIDER_SIZE,
+    jumpHeld: false,
   });
   const [charDir, setCharDir] = useState<"left" | "right">("right");
   const [charAnim, setCharAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
   const [charFrame, setCharFrame] = useState(0);
   const [displayRotation, setDisplayRotation] = useState(0); // Animated rotation (degrees)
   
-  // Codex physics state (AI-controlled, same physics as Nimbus)
-  // Floor at y=5 means collision box bottom should be at y=5*TILE=160
-  // Collision box is 44 tall, so top = 160 - 44 = 116 = ~3.625 tiles
+  // Codex physics state (AI - learns from JP)
+  // CARGO RESCUE: Start in Cargo bay with JP
   const [codexPhysics, setCodexPhysics] = useState<PhysicsState>({
-    x: 13 * TILE,  // Start in Bridge, to the right of Nimbus (x=10)
-    y: 5 * TILE - 44,   // Position so feet touch floor at y=5
+    x: 5 * TILE,  // Cargo bay, next to JP
+    y: 11 * TILE - PLAYER.COLLIDER_SIZE - 2,   // Floor at y=11 (Cargo deck) - raised 2px to avoid ground collision
     vx: 0,
     vy: 0,
     gravity: "DOWN",
-    grounded: true,  // Start grounded to prevent fall-through
-    width: 32,
-    height: 44,
+    grounded: true,
+    width: PLAYER.COLLIDER_SIZE,
+    height: PLAYER.COLLIDER_SIZE,
     jumpHeld: false,
   });
   const [codexDir, setCodexDir] = useState<"left" | "right">("left");
@@ -250,15 +294,97 @@ export default function ShipPage() {
   // AI input state (what the AI "wants" to do this frame)
   const codexInputRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
   
-  // Refs for AI to access latest physics state (avoids stale closure issue)
+  // Refs for the unified rAF loop / AI to access latest physics without stale closures.
+  // Note: refs are synced from state via effects, but the rAF loop also writes to them.
   const codexPhysicsRef = useRef(codexPhysics);
   const charPhysicsRef = useRef(charPhysics);
-  codexPhysicsRef.current = codexPhysics;
-  charPhysicsRef.current = charPhysics;
+  useEffect(() => { codexPhysicsRef.current = codexPhysics; }, [codexPhysics]);
+  useEffect(() => { charPhysicsRef.current = charPhysics; }, [charPhysics]);
   
-  // Path visualization
+  // Path visualization (BFS path)
   const [codexPath, setCodexPath] = useState<PathStep[]>([]);
+  const codexPathRef = useRef<PathStep[]>([]);
+  useEffect(() => { codexPathRef.current = codexPath; }, [codexPath]);
+
+  const [codexPathSegments, setCodexPathSegments] = useState<any[]>([]);
   const [showPaths, setShowPaths] = useState(true);
+  
+  // Physics-based pathfinding
+  const [showPhysicsPaths, setShowPhysicsPaths] = useState(false);
+  const [physicsTrajectories, setPhysicsTrajectories] = useState<JumpResult[]>([]);
+  const [usePhysicsAI, setUsePhysicsAI] = useState(true); // Start with physics AI enabled
+
+  // Refs for flags used inside the rAF loop (avoids restarting the loop on every render)
+  const showPhysicsPathsRef = useRef(showPhysicsPaths);
+  const usePhysicsAIRef = useRef(usePhysicsAI);
+  useEffect(() => { showPhysicsPathsRef.current = showPhysicsPaths; }, [showPhysicsPaths]);
+  useEffect(() => { usePhysicsAIRef.current = usePhysicsAI; }, [usePhysicsAI]);
+
+  // Planned physics paths (for SVG visualization using JumpResult.trajectory)
+  const [codexPhysicsPlan, setCodexPhysicsPlan] = useState<JumpResult[]>([]);
+  const [nimPhysicsPlan, setNimPhysicsPlan] = useState<JumpResult[]>([]);
+
+  const codexCurrentPathRef = useRef<JumpResult[]>([]); // Full planned path (execution)
+  const codexPathProgressRef = useRef(0); // Which jump we're currently executing
+  const lastPathCalcTimeRef = useRef(0); // Throttle recalculation
+  
+  // Nim target character (trapped on Bridge ceiling)
+  // CARGO RESCUE: Nim is trapped on Bridge ceiling, waiting for rescue
+  const [nimPhysics, setNimPhysics] = useState<PhysicsState>({
+    x: 12 * TILE,  // Bridge center
+    y: 2 * TILE - PLAYER.COLLIDER_SIZE,   // Ceiling level (y=2 is just below hull at y=1)
+    vx: 0,
+    vy: 0,
+    gravity: "UP",  // Trapped on ceiling!
+    grounded: true,
+    width: PLAYER.COLLIDER_SIZE,
+    height: PLAYER.COLLIDER_SIZE,
+    jumpHeld: false,
+  });
+  const [nimDir, setNimDir] = useState<"left" | "right">("left");
+  const [nimAnim, setNimAnim] = useState<"Idle" | "Run" | "Jump">("Idle");
+  const [nimFrame, setNimFrame] = useState(0);
+  const [nimDisplayRotation, setNimDisplayRotation] = useState(0);
+  
+  // Nim physics ref (used by rAF loop / AI without stale closures)
+  const nimPhysicsRef = useRef(nimPhysics);
+  useEffect(() => { nimPhysicsRef.current = nimPhysics; }, [nimPhysics]);
+  
+  // Recording mode
+  const [recording, setRecording] = useState(false);
+  const recordingRef = useRef(false); // Ref for latest value in callbacks
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
+  
+  // Replay state
+  const [isReplaying, setIsReplaying] = useState(false);
+  const isReplayingRef = useRef(isReplaying);
+  useEffect(() => { isReplayingRef.current = isReplaying; }, [isReplaying]);
+
+  const replayIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const [moveHistory, setMoveHistory] = useState<Array<{char: string, from: {x: number, y: number}, to: {x: number, y: number}, action: string, time: number}>>([]);
+  const [gameMessage, setGameMessage] = useState<string>("");
+  const recordingStartTime = useRef<number>(0);
+  
+  // Click-to-move destination
+  const [jpDestination, setJpDestination] = useState<{x: number, y: number} | null>(null);
+  const [jpPath, setJpPath] = useState<PathStep[]>([]);
+  
+  // Nim AI pathfinding (click to set destination)
+  const [nimDestination, setNimDestination] = useState<{x: number, y: number} | null>(null);
+  const nimDestinationRef = useRef<{x: number, y: number} | null>(null);
+  const nimDestKeyRef = useRef<string | null>(null);
+  const nimDebugTickRef = useRef(0);
+  useEffect(() => { nimDestinationRef.current = nimDestination; }, [nimDestination]);
+
+  const [nimPath, setNimPath] = useState<PathStep[]>([]);
+  const nimCurrentPathRef = useRef<JumpResult[]>([]);
+  const nimPathProgressRef = useRef(0);
+  const nimLastPathCalcTimeRef = useRef(0);
+  const nimInputRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
+  
+  // Nim baked sprites
+  const [nimBaked, setNimBaked] = useState<BakedSprite | null>(null);
   
   // Debug: tile position visualization
   const [debugTiles, setDebugTiles] = useState<{
@@ -294,14 +420,24 @@ export default function ShipPage() {
       setSheet(spriteSheet);
       setNimbusBaked(bakeIdentitySprites(spriteSheet, nimbus, faceSheet));
       setCodexBaked(bakeIdentitySprites(spriteSheet, codex, faceSheet));
+      setNimBaked(bakeIdentitySprites(spriteSheet, nim, faceSheet));
     }
     load();
   }, []);
 
   // Scroll handling
+  // Keep viewX/viewY refs in sync so the rAF loop doesn't fight manual scrolling.
   const handleScroll = (dx: number, dy: number) => {
-    setViewX(x => Math.max(0, Math.min(SHIP_W - VIEW_W, x + dx)));
-    setViewY(y => Math.max(0, Math.min(SHIP_H - VIEW_H, y + dy)));
+    setViewX(x => {
+      const nx = Math.max(0, Math.min(SHIP_W - VIEW_W, x + dx));
+      viewXRef.current = nx;
+      return nx;
+    });
+    setViewY(y => {
+      const ny = Math.max(0, Math.min(SHIP_H - VIEW_H, y + dy));
+      viewYRef.current = ny;
+      return ny;
+    });
   };
   
   // Keyboard input
@@ -334,12 +470,51 @@ export default function ShipPage() {
     };
   }, []);
   
-  // Combined physics + camera loop (must be in sync to avoid jitter)
+  // ============================================================
+  // UNIFIED REQUESTANIMATIONFRAME GAME LOOP WITH FIXED TIMESTEP
+  // ============================================================
+  // Replaces the dual setInterval loops (16ms physics + 200ms AI)
+  // with a single rAF loop using accumulator pattern for deterministic physics
+  // 
+  // FIXED TIMESTEP: Physics always runs at 60Hz (16.67ms steps)
+  // AI: Runs every 12 frames (~200ms at 60fps)
+  // CAMERA: Updated every frame for smooth interpolation
   useEffect(() => {
-    const gameLoop = setInterval(() => {
-      const keys = keysRef.current;
+    // Fixed timestep configuration
+    const FIXED_TIMESTEP = 1000 / 60; // ~16.67ms per physics step
+    const MAX_ACCUMULATOR = 100; // Prevent spiral of death
+    
+    // AI runs every ~12 frames (200ms equivalent at 60fps)
+    const AI_INTERVAL_FRAMES = 12;
+    let frameCount = 0;
+    
+    // Accumulator for fixed timestep physics
+    let accumulator = 0;
+    let lastTime: number | null = null;
+    let rafId: number;
+    
+    const gameLoop = (currentTime: number) => {
+      // Initialize lastTime on first frame and skip processing
+      // This prevents a large deltaTime on the second frame after React mount
+      if (lastTime === null) {
+        lastTime = currentTime;
+        accumulator = 0; // Reset any accumulated time
+        rafId = requestAnimationFrame(gameLoop);
+        return;
+      }
       
-      // Screen-relative input: WASD = screen directions, Space = jump
+      // Calculate delta time and update accumulator
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
+      accumulator += deltaTime;
+      
+      // Clamp accumulator to prevent spiral of death on slow frames
+      if (accumulator > MAX_ACCUMULATOR) {
+        accumulator = MAX_ACCUMULATOR;
+      }
+      
+      // Get player input once per frame
+      const keys = keysRef.current;
       const input: ScreenInput = {
         up: keys.has("w"),
         down: keys.has("s"),
@@ -348,190 +523,301 @@ export default function ShipPage() {
         jump: keys.has(" "),
       };
       
-      // Update Nimbus physics
-      setCharPhysics(state => {
-        const newState = updatePhysics(state, input, shipGrid, SOLID_TILES);
-        
-        // Update facing direction based on GRAVITY-RELATIVE lateral velocity
-        const moveRightVec = getMoveRightVector(newState.gravity);
-        const lateralVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
-        
-        if (lateralVel > 0.3) setCharDir("right");
-        else if (lateralVel < -0.3) setCharDir("left");
-        
-        // Update animation based on total movement
-        const isMoving = Math.abs(newState.vx) > 0.3 || Math.abs(newState.vy) > 0.3;
-        if (!newState.grounded) {
-          setCharAnim("Jump");
-        } else if (isMoving) {
-          setCharAnim("Run");
-        } else {
-          setCharAnim("Idle");
-        }
-        
-        // Spring camera follow (ease in-out with natural lag)
-        if (cameraEnabled) {
-          const targetViewX = Math.max(0, Math.min(
-            SHIP_W - VIEW_W, 
-            newState.x / TILE - VIEW_W / 2
-          ));
-          const targetViewY = Math.max(0, Math.min(
-            SHIP_H - VIEW_H, 
-            newState.y / TILE - VIEW_H / 2
-          ));
-          
-          // Spring physics: acceleration toward target, with damping
-          const stiffness = 0.004;  // How strongly camera pulls toward target
-          const damping = 0.82;    // Velocity decay (lower = more lag/overshoot)
-          
-          setViewX(vx => {
-            const vel = cameraVelRef.current;
-            vel.x += (targetViewX - vx) * stiffness;
-            vel.x *= damping;
-            return vx + vel.x;
-          });
-          setViewY(vy => {
-            const vel = cameraVelRef.current;
-            vel.y += (targetViewY - vy) * stiffness;
-            vel.y *= damping;
-            return vy + vel.y;
-          });
-        }
-        
-        return newState;
-      });
+      // Read current physics state from refs (fresh each frame)
+      let localCharPhysics = charPhysicsRef.current;
+      let localCodexPhysics = codexPhysicsRef.current;
+      let localNimPhysics = nimPhysicsRef.current;
       
-      // Update Codex physics (AI-driven)
-      setCodexPhysics(state => {
-        const codexInput = codexInputRef.current;
-        const newState = updatePhysics(state, codexInput, shipGrid, SOLID_TILES);
+      // ==========================================================
+      // FIXED TIMESTEP PHYSICS: Step physics in discrete intervals
+      // This ensures consistent, deterministic physics regardless of
+      // frame rate fluctuations or display refresh rate
+      // ==========================================================
+      let physicsSteps = 0;
+      while (accumulator >= FIXED_TIMESTEP) {
+        // Store old positions for tile-change detection
+        const oldCharX = Math.round(localCharPhysics.x / TILE);
+        const oldCharY = Math.round(localCharPhysics.y / TILE);
+        const oldCharGravity = localCharPhysics.gravity;
         
-        // Update Codex facing direction
-        const moveRightVec = getMoveRightVector(newState.gravity);
-        const lateralVel = newState.vx * moveRightVec.x + newState.vy * moveRightVec.y;
+        // --- JP (Nimbus) Physics ---
+        const newCharState = updatePhysics(localCharPhysics, input, shipGrid, SOLID_TILES);
+        localCharPhysics = newCharState;
+        charPhysicsRef.current = newCharState;
         
-        if (lateralVel > 0.3) setCodexDir("right");
-        else if (lateralVel < -0.3) setCodexDir("left");
+        // Recording: detect tile changes and record moves
+        const newCharX = Math.round(newCharState.x / TILE);
+        const newCharY = Math.round(newCharState.y / TILE);
+        const charPosChanged = newCharX !== oldCharX || newCharY !== oldCharY;
+        const charGravityChanged = newCharState.gravity !== oldCharGravity;
         
-        // Update Codex animation
-        const isMoving = Math.abs(newState.vx) > 0.3 || Math.abs(newState.vy) > 0.3;
-        if (!newState.grounded) {
-          setCodexAnim("Jump");
-        } else if (isMoving) {
-          setCodexAnim("Run");
-        } else {
-          setCodexAnim("Idle");
+        if (recordingRef.current && (charPosChanged || charGravityChanged)) {
+          let action: string;
+          if (!localCharPhysics.grounded && newCharState.grounded && charPosChanged) action = "land";
+          else if (localCharPhysics.grounded && !newCharState.grounded) action = "jump";
+          else if (charGravityChanged) action = "wall-jump";
+          else action = "walk";
+          
+          setMoveHistory(prev => {
+            const lastMove = prev[prev.length - 1];
+            if (lastMove && 
+                lastMove.from.x === oldCharX && lastMove.from.y === oldCharY &&
+                lastMove.to.x === newCharX && lastMove.to.y === newCharY &&
+                lastMove.action === action) {
+              return prev;
+            }
+            return [...prev, {
+              char: "JP",
+              from: { x: oldCharX, y: oldCharY },
+              to: { x: newCharX, y: newCharY },
+              action,
+              time: Date.now() - recordingStartTime.current
+            }];
+          });
         }
         
-        return newState;
-      });
-    }, 16); // Single 60fps loop
-    
-    return () => clearInterval(gameLoop);
-  }, [cameraEnabled]);
-  
-  // Smooth rotation animation when gravity changes
-  useEffect(() => {
-    const targetRotation = getGravityRotation(charPhysics.gravity);
-    
-    const animateRotation = () => {
-      setDisplayRotation(current => {
-        // Normalize both angles to 0-360
-        const normalizedCurrent = ((current % 360) + 360) % 360;
-        const normalizedTarget = ((targetRotation % 360) + 360) % 360;
+        // --- Codex Physics (AI-driven) ---
+        const newCodexState = updatePhysics(localCodexPhysics, codexInputRef.current, shipGrid, SOLID_TILES);
+        localCodexPhysics = newCodexState;
+        codexPhysicsRef.current = newCodexState;
         
-        // Calculate shortest path
+        // --- Nim Physics (AI-driven when has destination) ---
+        const newNimState = updatePhysics(localNimPhysics, nimInputRef.current, shipGrid, SOLID_TILES);
+        localNimPhysics = newNimState;
+        nimPhysicsRef.current = newNimState;
+        
+        accumulator -= FIXED_TIMESTEP;
+        physicsSteps++;
+        frameCount++;
+      }
+      
+      // ==========================================================
+      // VISUAL STATE UPDATES (refs only — no React setState!)
+      // Canvas reads these refs directly each frame
+      // ==========================================================
+      if (physicsSteps > 0) {
+        // Update JP (Nimbus) visual state
+        const charMoveRightVec = getMoveRightVector(localCharPhysics.gravity);
+        const charLateralVel = localCharPhysics.vx * charMoveRightVec.x + localCharPhysics.vy * charMoveRightVec.y;
+        if (charLateralVel > 0.3) charDirRef.current = "right";
+        else if (charLateralVel < -0.3) charDirRef.current = "left";
+        
+        // Update Codex visual state
+        const codexMoveRightVec = getMoveRightVector(localCodexPhysics.gravity);
+        const codexLateralVel = localCodexPhysics.vx * codexMoveRightVec.x + localCodexPhysics.vy * codexMoveRightVec.y;
+        if (codexLateralVel > 0.3) codexDirRef.current = "right";
+        else if (codexLateralVel < -0.3) codexDirRef.current = "left";
+        
+        // Update Nim visual state
+        const nimMoveRightVec = getMoveRightVector(localNimPhysics.gravity);
+        const nimLateralVel = localNimPhysics.vx * nimMoveRightVec.x + localNimPhysics.vy * nimMoveRightVec.y;
+        if (nimLateralVel > 0.3) nimDirRef.current = "right";
+        else if (nimLateralVel < -0.3) nimDirRef.current = "left";
+        
+        // Update rotation targets
+        charTargetRotationRef.current = getGravityRotation(localCharPhysics.gravity);
+        codexTargetRotationRef.current = getGravityRotation(localCodexPhysics.gravity);
+        nimTargetRotationRef.current = getGravityRotation(localNimPhysics.gravity);
+      }
+      
+      // ==========================================================
+      // ANIMATION & ROTATION (consolidated into rAF, no setIntervals)
+      // ==========================================================
+      // Sprite animation (every ~6 frames = ~100ms at 60fps)
+      if (frameCount % 6 === 0 && sheetRef.current) {
+        const advanceFrame = (animRef: { current: string }, frameRef: { current: number }) => {
+          const tag = sheetRef.current!.tags.find((t: any) => t.name === animRef.current);
+          if (tag) {
+            const next = frameRef.current + 1;
+            frameRef.current = next > tag.to ? tag.from : (frameRef.current < tag.from ? tag.from : next);
+          }
+        };
+        
+        // Determine anim state from physics
+        const charIsMoving = Math.abs(localCharPhysics.vx) > 0.3 || Math.abs(localCharPhysics.vy) > 0.3;
+        charAnimRef.current = !localCharPhysics.grounded ? "Jump" : charIsMoving ? "Run" : "Idle";
+        
+        const codexIsMoving = Math.abs(localCodexPhysics.vx) > 0.3 || Math.abs(localCodexPhysics.vy) > 0.3;
+        codexAnimRef.current = !localCodexPhysics.grounded ? "Jump" : codexIsMoving ? "Run" : "Idle";
+        
+        const nimIsMoving = Math.abs(localNimPhysics.vx) > 0.3 || Math.abs(localNimPhysics.vy) > 0.3;
+        nimAnimRef.current = !localNimPhysics.grounded ? "Jump" : nimIsMoving ? "Run" : "Idle";
+        
+        advanceFrame(charAnimRef, charFrameRef);
+        advanceFrame(codexAnimRef, codexFrameRef);
+        advanceFrame(nimAnimRef, nimFrameRef);
+      }
+      
+      // Smooth rotation interpolation (every frame)
+      const smoothRotation = (current: number, target: number): number => {
+        const normalizedCurrent = ((current % 360) + 360) % 360;
+        const normalizedTarget = ((target % 360) + 360) % 360;
         let diff = normalizedTarget - normalizedCurrent;
         if (diff > 180) diff -= 360;
         if (diff < -180) diff += 360;
-        
-        // If close enough, snap to target
-        if (Math.abs(diff) < 2) {
-          return normalizedTarget;
-        }
-        
-        // Animate: ~300ms total at 60fps = 18 frames, so move ~5-20 degrees per frame
-        // Use easing: faster when far, slower when close
-        const speed = Math.max(11, Math.abs(diff) * 0.3);
-        const step = Math.sign(diff) * Math.min(speed, Math.abs(diff));
-        
-        return normalizedCurrent + step;
-      });
-    };
-    
-    const rotationInterval = setInterval(animateRotation, 16);
-    return () => clearInterval(rotationInterval);
-  }, [charPhysics.gravity]);
-  
-  // Smooth rotation animation for Codex when gravity changes
-  useEffect(() => {
-    const targetRotation = getGravityRotation(codexPhysics.gravity);
-    
-    const animateRotation = () => {
-      setCodexDisplayRotation(current => {
-        const normalizedCurrent = ((current % 360) + 360) % 360;
-        const normalizedTarget = ((targetRotation % 360) + 360) % 360;
-        
-        let diff = normalizedTarget - normalizedCurrent;
-        if (diff > 180) diff -= 360;
-        if (diff < -180) diff += 360;
-        
         if (Math.abs(diff) < 2) return normalizedTarget;
-        
         const speed = Math.max(11, Math.abs(diff) * 0.3);
         const step = Math.sign(diff) * Math.min(speed, Math.abs(diff));
-        
         return normalizedCurrent + step;
-      });
+      };
+      
+      displayRotationRef.current = smoothRotation(displayRotationRef.current, charTargetRotationRef.current);
+      codexDisplayRotationRef.current = smoothRotation(codexDisplayRotationRef.current, codexTargetRotationRef.current);
+      nimDisplayRotationRef.current = smoothRotation(nimDisplayRotationRef.current, nimTargetRotationRef.current);
+      
+      // ==========================================================
+      // SPRING CAMERA UPDATE (refs only — no setState!)
+      // ==========================================================
+      if (cameraEnabledRef.current) {
+        const targetViewX = Math.max(0, Math.min(
+          SHIP_W - VIEW_W, 
+          localCharPhysics.x / TILE - VIEW_W / 2
+        ));
+        const targetViewY = Math.max(0, Math.min(
+          SHIP_H - VIEW_H, 
+          localCharPhysics.y / TILE - VIEW_H / 2
+        ));
+        
+        // Spring physics: acceleration toward target, with damping
+        const stiffness = 0.004;
+        const damping = 0.82;
+        
+        cameraVelRef.current.x += (targetViewX - viewXRef.current) * stiffness;
+        cameraVelRef.current.x *= damping;
+        cameraVelRef.current.y += (targetViewY - viewYRef.current) * stiffness;
+        cameraVelRef.current.y *= damping;
+        
+        viewXRef.current += cameraVelRef.current.x;
+        viewYRef.current += cameraVelRef.current.y;
+      }
+      
+      // ==========================================================
+      // RENDER TO CANVAS (60fps smooth, no React re-renders)
+      // ==========================================================
+      renderGameCanvasRef.current();
+      
+      // Continue the loop
+      rafId = requestAnimationFrame(gameLoop);
     };
     
-    const rotationInterval = setInterval(animateRotation, 16);
-    return () => clearInterval(rotationInterval);
-  }, [codexPhysics.gravity]);
+    // Start the loop
+    rafId = requestAnimationFrame(gameLoop);
+    
+    // Cleanup
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, []); // Empty deps — loop runs once, reads everything from refs
   
-  // Animation frame update - Nimbus
-  useEffect(() => {
-    if (!sheet) return;
-    const tag = sheet.tags.find(t => t.name === charAnim);
-    if (!tag) return;
-    
-    const interval = setInterval(() => {
-      setCharFrame(f => {
-        const next = f + 1;
-        return next > tag.to ? tag.from : (f < tag.from ? tag.from : next);
-      });
-    }, 100);
-    
-    return () => clearInterval(interval);
-  }, [charAnim, sheet]);
+  // REMOVED: Old setInterval-based rotation and animation timers
+  // All rotation interpolation and sprite animation is now handled
+  // inside the rAF game loop (see animation & rotation section above)
   
-  // Animation frame update - Codex
+  // Calculate physics-based path when CODEX is grounded and needs a new plan
   useEffect(() => {
-    if (!sheet) return;
-    const tag = sheet.tags.find(t => t.name === codexAnim);
-    if (!tag) return;
+    // Only recalculate when grounded
+    if (!codexPhysics.grounded) return;
     
-    const interval = setInterval(() => {
-      setCodexFrame(f => {
-        const next = f + 1;
-        return next > tag.to ? tag.from : (f < tag.from ? tag.from : next);
+    const currentPlan = codexCurrentPathRef.current;
+    const currentProgress = codexPathProgressRef.current;
+    
+    // Check if we need a new plan
+    const needsNewPlan = currentPlan.length === 0 || currentProgress >= currentPlan.length;
+    
+    // Check if current plan is stale
+    // Get the NEXT jump we should execute
+    const nextJump = currentPlan[currentProgress];
+    const codexTileX = Math.round(codexPhysics.x / TILE);
+    const codexTileY = Math.round(codexPhysics.y / TILE);
+    
+    // Plan is stale if we moved >3 tiles from expected position or gravity changed
+    const pathStale = nextJump && (
+      Math.abs(codexTileX - nextJump.start.x) > 3 || 
+      Math.abs(codexTileY - nextJump.start.y) > 3 ||
+      codexPhysics.gravity !== nextJump.start.gravity
+    );
+    
+    if (!needsNewPlan && !pathStale) return; // Keep current plan
+    
+    // Throttle recalculation to once per second
+    const now = Date.now();
+    if (now - lastPathCalcTimeRef.current < 1000) return;
+    lastPathCalcTimeRef.current = now;
+    
+    // Calculate new path
+    const nimTileX = Math.round(nimPhysics.x / TILE);
+    const nimTileY = Math.round(nimPhysics.y / TILE);
+    
+    const reachable = calculateReachableCells(
+      codexTileX,
+      codexTileY,
+      codexPhysics.gravity as any,
+      shipGrid,
+      SOLID_TILES as string[]
+    );
+    
+    // Find best path to Nim
+    let bestCell = null;
+    let minDist = Infinity;
+    
+    for (const cell of reachable) {
+      const dist = Math.abs(cell.x - nimTileX) + Math.abs(cell.y - nimTileY);
+      if (dist < minDist) {
+        minDist = dist;
+        bestCell = cell;
+      }
+    }
+    
+    if (bestCell && bestCell.path.length > 0) {
+      codexCurrentPathRef.current = bestCell.path;
+      codexPathProgressRef.current = 0;
+      
+      // Build visualization
+      const vizPath = bestCell.path.flatMap((jump: any): PathStep[] => {
+        if (!jump.landing) return [];
+        return [
+          { node: { x: jump.start.x, y: jump.start.y, gravity: jump.start.gravity as GravityDir }, action: 'start' },
+          { node: { x: jump.landing.x, y: jump.landing.y, gravity: jump.landing.gravity as GravityDir }, action: 'jump' }
+        ];
       });
-    }, 150); // Walking pace animation
+      setCodexPath(vizPath);
+      console.log("[AI] Plan:", bestCell.path.length, "jumps to Nim (", reachable.length, "reachable)");
+    }
     
-    return () => clearInterval(interval);
-  }, [codexAnim, sheet]);
+    // Also update trajectory visualization if enabled
+    if (showPhysicsPaths) {
+      const trajs = getJumpTrajectories(
+        codexTileX,
+        codexTileY,
+        codexPhysics.gravity as any,
+        shipGrid,
+        SOLID_TILES
+      );
+      setPhysicsTrajectories(trajs);
+    }
+  }, [codexPhysics.grounded, codexPhysics.x, codexPhysics.y, codexPhysics.gravity, nimPhysics.x, nimPhysics.y, showPhysicsPaths]);
+
+  // REMOVED: Nim rotation and Codex animation setIntervals
+  // Now handled inside the rAF game loop
   
   // Codex AI - chase player using pathfinding
   const codexPathIndexRef = useRef(0);
   const lastPathTimeRef = useRef(0);
   const codexLastPosRef = useRef({ x: 0, y: 0 });
   const codexStuckCountRef = useRef(0);
+  const codexBlockedTransitionsRef = useRef<Set<string>>(new Set());
+  const codexSearchRef = useRef<IncrementalSearchState | null>(null);
+  const codexSearchMetaRef = useRef<{ startKey: string; goalKey: string } | null>(null);
   
   useEffect(() => {
     const aiInterval = setInterval(() => {
+      // Skip AI during replay
+      if (isReplaying) return;
+      
       // Read latest physics from refs (avoids stale closure)
       const codexPhysics = codexPhysicsRef.current;
       const charPhysics = charPhysicsRef.current;
+      const nimPhysics = nimPhysicsRef.current;
       
       // Safety: if Codex goes off the map, reset to near player
       const BOUNDS_MARGIN = TILE * 2;
@@ -546,13 +832,13 @@ export default function ShipPage() {
         // Reset Codex to spawn position
         setCodexPhysics({
           x: 13 * TILE,
-          y: 5 * TILE - 44,
+          y: 5 * TILE - PLAYER.COLLIDER_SIZE,
           vx: 0,
           vy: 0,
           gravity: "DOWN",
           grounded: true,
-          width: 32,
-          height: 44,
+          width: PLAYER.COLLIDER_SIZE,
+          height: PLAYER.COLLIDER_SIZE,
           jumpHeld: false,
         });
         setCodexPath([]);
@@ -560,97 +846,99 @@ export default function ShipPage() {
         return; // Skip this frame
       }
       
-      // Recalculate path every 500ms
-      const now = Date.now();
-      if (now - lastPathTimeRef.current > 500) {
-        lastPathTimeRef.current = now;
-        
-        // Get standing tile position - MUST account for current gravity!
-        // "Feet" position depends on which surface we're attached to
-        // Standing tile = the empty tile the character occupies, adjacent to the solid surface
-        const getStandingTile = (physics: PhysicsState) => {
-          const centerX = physics.x + physics.width / 2;
-          const centerY = physics.y + physics.height / 2;
-          
-          switch (physics.gravity) {
-            case "DOWN":  // Feet at bottom, standing on floor below
-              return {
-                x: Math.floor(centerX / TILE),
-                y: Math.floor((physics.y + physics.height - 1) / TILE)  // Tile containing feet
-              };
-            case "UP":    // Feet at top, standing on ceiling above
-              return {
-                x: Math.floor(centerX / TILE),
-                y: Math.floor(physics.y / TILE)  // Tile containing top of collision box
-              };
-            case "LEFT":  // Feet at left, standing on wall to left
-              return {
-                x: Math.floor(physics.x / TILE),  // Tile containing left edge
-                y: Math.floor(centerY / TILE)
-              };
-            case "RIGHT": // Feet at right, standing on wall to right
-              return {
-                x: Math.floor((physics.x + physics.width - 1) / TILE),  // Tile containing right edge
-                y: Math.floor(centerY / TILE)
-              };
+      // --- Path search (incremental, budgeted per AI tick) ---
+      // Get standing tile position - MUST account for current gravity!
+      const getStandingTile = (physics: PhysicsState) => {
+        const centerX = physics.x + physics.width / 2;
+        const centerY = physics.y + physics.height / 2;
+
+        switch (physics.gravity) {
+          case "DOWN":
+            return { x: Math.floor(centerX / TILE), y: Math.floor((physics.y + physics.height - 1) / TILE) };
+          case "UP":
+            return { x: Math.floor(centerX / TILE), y: Math.floor(physics.y / TILE) };
+          case "LEFT":
+            return { x: Math.floor(physics.x / TILE), y: Math.floor(centerY / TILE) };
+          case "RIGHT":
+            return { x: Math.floor((physics.x + physics.width - 1) / TILE), y: Math.floor(centerY / TILE) };
+        }
+      };
+
+      const codexTile = getStandingTile(codexPhysics);
+      const playerTile = getStandingTile(charPhysics); // For debug visualization
+      // CARGO RESCUE: CODEX targets Nim (the pink character on Bridge ceiling)
+      const targetTile = getStandingTile(nimPhysics);
+
+      // Update debug visualization
+      const getFloorOffset = (gravity: string) => {
+        switch (gravity) {
+          case "DOWN": return { dx: 0, dy: 1 };
+          case "UP": return { dx: 0, dy: -1 };
+          case "LEFT": return { dx: -1, dy: 0 };
+          case "RIGHT": return { dx: 1, dy: 0 };
+          default: return { dx: 0, dy: 1 };
+        }
+      };
+      const nimbusFloor = getFloorOffset(charPhysics.gravity);
+      const codexFloor = getFloorOffset(codexPhysics.gravity);
+
+      setDebugTiles({
+        nimbus: {
+          ...playerTile,
+          centerX: charPhysics.x + charPhysics.width / 2,
+          centerY: charPhysics.y + charPhysics.height / 2,
+          floorX: playerTile.x + nimbusFloor.dx,
+          floorY: playerTile.y + nimbusFloor.dy,
+        },
+        codex: {
+          ...codexTile,
+          centerX: codexPhysics.x + codexPhysics.width / 2,
+          centerY: codexPhysics.y + codexPhysics.height / 2,
+          floorX: codexTile.x + codexFloor.dx,
+          floorY: codexTile.y + codexFloor.dy,
+        },
+      });
+
+      // Only search if CODEX is grounded and target is valid
+      if (codexPhysics.grounded) {
+        const startNode = { x: codexTile.x, y: codexTile.y, gravity: codexPhysics.gravity as GravityDir };
+        // CARGO RESCUE: CODEX targets Nim (not JP)
+        const goalNode = { x: targetTile.x, y: targetTile.y };
+
+        const startKey = `${startNode.x},${startNode.y},${startNode.gravity}`;
+        const goalKey = `${goalNode.x},${goalNode.y}`;
+
+        // Use physics-based AI or BFS
+        if (usePhysicsAI) {
+          // Path is calculated in useEffect, just execute the current plan
+          // No need to recalculate here - useEffect handles that
+        } else {
+          // BFS-based pathfinding
+          // (Re)start incremental search when start/goal tile changes
+          if (!codexSearchRef.current || !codexSearchMetaRef.current ||
+              codexSearchMetaRef.current.startKey !== startKey ||
+              codexSearchMetaRef.current.goalKey !== goalKey) {
+            codexSearchRef.current = createIncrementalSearch(startNode, goalNode);
+            codexSearchMetaRef.current = { startKey, goalKey };
           }
-        };
-        
-        const codexTile = getStandingTile(codexPhysics);
-        const playerTile = getStandingTile(charPhysics);
-        
-        // Update debug visualization
-        // Floor offset depends on gravity direction
-        const getFloorOffset = (gravity: string) => {
-          switch (gravity) {
-            case "DOWN": return { dx: 0, dy: 1 };
-            case "UP": return { dx: 0, dy: -1 };
-            case "LEFT": return { dx: -1, dy: 0 };
-            case "RIGHT": return { dx: 1, dy: 0 };
-            default: return { dx: 0, dy: 1 };
-          }
-        };
-        const nimbusFloor = getFloorOffset(charPhysics.gravity);
-        const codexFloor = getFloorOffset(codexPhysics.gravity);
-        
-        setDebugTiles({
-          nimbus: {
-            ...playerTile,
-            centerX: charPhysics.x + charPhysics.width / 2,
-            centerY: charPhysics.y + charPhysics.height / 2,
-            floorX: playerTile.x + nimbusFloor.dx,
-            floorY: playerTile.y + nimbusFloor.dy
-          },
-          codex: {
-            ...codexTile,
-            centerX: codexPhysics.x + codexPhysics.width / 2,
-            centerY: codexPhysics.y + codexPhysics.height / 2,
-            floorX: codexTile.x + codexFloor.dx,
-            floorY: codexTile.y + codexFloor.dy
-          }
-        });
-        
-        // Only pathfind if both characters are grounded (valid standing positions)
-        if (codexPhysics.grounded && charPhysics.grounded) {
-          console.log("[Pathfinding] Codex:", { ...codexTile, gravity: codexPhysics.gravity },
-            "pixel:", Math.round(codexPhysics.x), Math.round(codexPhysics.y));
-          console.log("[Pathfinding] Player:", { ...playerTile, gravity: charPhysics.gravity });
-          
-          const path = findPath(
+
+          // Spend a fixed budget each tick.
+          const result = stepIncrementalSearch(
+            codexSearchRef.current,
             shipGrid,
             SOLID_TILES as string[],
-            { x: codexTile.x, y: codexTile.y, gravity: codexPhysics.gravity as GravityDir },
-            { x: playerTile.x, y: playerTile.y }
+            movementMap,
+            codexBlockedTransitionsRef.current,
+            100
           );
-          
-          console.log("[Pathfinding] Result:", path ? `${path.length} steps` : "null");
-          
-          if (path && path.length > 0) {
-            setCodexPath(path);
-            codexPathIndexRef.current = 1; // Start at step 1 (skip start position)
-          } else {
-            // Clear stale path if pathfinding fails - use direct pursuit instead
+
+          if (result.status === "found") {
+            setCodexPath(result.path);
+            setCodexPathSegments(result.segments);
+            codexPathIndexRef.current = 1;
+          } else if (result.status === "not_found") {
             setCodexPath([]);
+            setCodexPathSegments([]);
             codexPathIndexRef.current = 0;
           }
         }
@@ -659,25 +947,104 @@ export default function ShipPage() {
       // AI decision: look at current path step and decide input
       const input: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
       
-      // Calculate direct distance to player (used for fallback and stopping)
+      // Calculate direct distance to target (Nim)
       const codexCenterX = codexPhysics.x + codexPhysics.width / 2;
       const codexCenterY = codexPhysics.y + codexPhysics.height / 2;
-      const playerCenterX = charPhysics.x + charPhysics.width / 2;
-      const playerCenterY = charPhysics.y + charPhysics.height / 2;
-      const directDx = playerCenterX - codexCenterX;
-      const directDy = playerCenterY - codexCenterY;
+      const targetCenterX = nimPhysics.x + nimPhysics.width / 2;
+      const targetCenterY = nimPhysics.y + nimPhysics.height / 2;
+      const directDx = targetCenterX - codexCenterX;
+      const directDy = targetCenterY - codexCenterY;
       const directDist = Math.sqrt(directDx * directDx + directDy * directDy);
       
-      // Stop if very close to player (within ~1.5 tiles)
+      // Stop if very close to target
       const STOP_DISTANCE = TILE * 1.5;
       
-      // When close to player, mark path as complete so we don't follow stale waypoints later
       if (directDist <= STOP_DISTANCE && codexPath.length > 0) {
-        codexPathIndexRef.current = codexPath.length;  // Mark path as complete
+        codexPathIndexRef.current = codexPath.length;
       }
       
-      if (directDist > STOP_DISTANCE) {
-        // Use path if available and not completed
+      // PHYSICS-BASED AI MODE: Execute pre-calculated jump trajectory
+      const currentPlan = codexCurrentPathRef.current;
+      const progress = codexPathProgressRef.current;
+      const currentJumpIndex = Math.floor(progress);
+      const isMidJump = progress % 1 !== 0; // Has decimal part = mid-jump
+      const isWalking = progress % 1 === 0.25; // 0.25 = walking state
+      
+      if (usePhysicsAI && currentPlan.length > 0 && currentJumpIndex < currentPlan.length && directDist > STOP_DISTANCE) {
+        const action = currentPlan[currentJumpIndex];
+        const grav = codexPhysics.gravity;
+        
+        // Get target position for this action
+        const targetX = action.landing?.x ?? action.start.x;
+        const targetY = action.landing?.y ?? action.start.y;
+        const targetPixelX = targetX * TILE + TILE / 2;
+        const targetPixelY = targetY * TILE + TILE / 2;
+        
+        if (isMidJump && codexPhysics.grounded) {
+          // Just landed from a jump, advance to next action
+          codexPathProgressRef.current = currentJumpIndex + 1;
+        } else if (isWalking) {
+          // Continue walking until we reach the target
+          const distToTarget = Math.abs(codexCenterX - targetPixelX) + Math.abs(codexCenterY - targetPixelY);
+          if (distToTarget < TILE * 0.5) {
+            // Close enough — advance to next step (no teleport snap)
+            codexPathProgressRef.current = currentJumpIndex + 1;
+          } else {
+            // Continue walking in the same direction
+            if (action.action === "walk-left") {
+              if (grav === "DOWN") input.left = true;
+              else if (grav === "UP") input.right = true;
+              else if (grav === "LEFT") input.up = true;
+              else if (grav === "RIGHT") input.down = true;
+            } else if (action.action === "walk-right") {
+              if (grav === "DOWN") input.right = true;
+              else if (grav === "UP") input.left = true;
+              else if (grav === "LEFT") input.down = true;
+              else if (grav === "RIGHT") input.up = true;
+            }
+          }
+        } else if (!isMidJump && !isWalking && codexPhysics.grounded) {
+          // Ready to execute next action
+          
+          // Handle walking actions
+          if (action.action === "walk-left") {
+            if (grav === "DOWN") input.left = true;
+            else if (grav === "UP") input.right = true;
+            else if (grav === "LEFT") input.up = true;
+            else if (grav === "RIGHT") input.down = true;
+            // Mark as walking (0.25 = walking state)
+            codexPathProgressRef.current = currentJumpIndex + 0.25;
+          } else if (action.action === "walk-right") {
+            if (grav === "DOWN") input.right = true;
+            else if (grav === "UP") input.left = true;
+            else if (grav === "LEFT") input.down = true;
+            else if (grav === "RIGHT") input.up = true;
+            // Mark as walking
+            codexPathProgressRef.current = currentJumpIndex + 0.25;
+          } else if (action.action === "jump-left") {
+            // Gravity-left means different screen directions based on gravity
+            if (grav === "DOWN") input.left = true;
+            else if (grav === "UP") input.right = true;
+            else if (grav === "LEFT") input.up = true;
+            else if (grav === "RIGHT") input.down = true;
+            input.jump = true;
+            // Mark that we've initiated this jump (will advance when we land)
+            codexPathProgressRef.current = currentJumpIndex + 0.5;
+          } else if (action.action === "jump-right") {
+            if (grav === "DOWN") input.right = true;
+            else if (grav === "UP") input.left = true;
+            else if (grav === "LEFT") input.down = true;
+            else if (grav === "RIGHT") input.up = true;
+            input.jump = true;
+            codexPathProgressRef.current = currentJumpIndex + 0.5;
+          } else {
+            input.jump = true; // straight jump
+            codexPathProgressRef.current = currentJumpIndex + 0.5;
+          }
+        }
+        
+      } else if (directDist > STOP_DISTANCE) {
+        // BFS FALLBACK MODE
         let targetX: number, targetY: number;
         let shouldJump = false;
         let needsGravityTransition = false;
@@ -692,48 +1059,31 @@ export default function ShipPage() {
           const dy = targetY - codexCenterY;
           const dist = Math.sqrt(dx * dx + dy * dy);
           
-          // Check if next waypoint requires gravity change - but only jump if CLOSE to transition point!
-          // Otherwise we'd jump in place forever instead of walking toward the transition
           if (targetStep.node.gravity !== codexPhysics.gravity && dist < TILE * 2) {
             needsGravityTransition = true;
           }
           
-          // Check if we've reached this waypoint
           if (dist < TILE / 2) {
             codexPathIndexRef.current++;
           }
         } else {
-          // Fallback: move directly toward player
-          targetX = playerCenterX;
-          targetY = playerCenterY;
+          targetX = targetCenterX;
+          targetY = targetCenterY;
         }
         
         const dx = targetX - codexCenterX;
         const dy = targetY - codexCenterY;
         
-        // Use SCREEN-RELATIVE input! The physics engine handles gravity conversion.
-        // If target is to the right on screen, press right. Physics does the rest.
-        // No need to use getMoveRightVector here - that caused double-inversion!
-        
-        // For floor/ceiling (UP/DOWN gravity): move left/right on screen
-        // For walls (LEFT/RIGHT gravity): move up/down on screen
-        let perpendicularDist = 0;
+        // Screen-relative walking
         if (codexPhysics.gravity === "DOWN" || codexPhysics.gravity === "UP") {
-          // On floor or ceiling: lateral movement is left/right
           if (dx > 4) input.right = true;
           else if (dx < -4) input.left = true;
-          perpendicularDist = Math.abs(dy);  // Vertical is perpendicular
         } else {
-          // On wall: lateral movement is up/down
           if (dy > 4) input.down = true;
           else if (dy < -4) input.up = true;
-          perpendicularDist = Math.abs(dx);  // Horizontal is perpendicular
         }
         
-        // If target is far perpendicular (more than 2 tiles), need to jump off surface
-        const needsToLeaveSurface = perpendicularDist > TILE * 2;
-        
-        // Stuck detection: if trying to move but position hasn't changed
+        // Stuck detection
         const lastPos = codexLastPosRef.current;
         const posDelta = Math.abs(codexPhysics.x - lastPos.x) + Math.abs(codexPhysics.y - lastPos.y);
         const isTryingToMove = input.left || input.right || input.up || input.down;
@@ -743,45 +1093,18 @@ export default function ShipPage() {
         } else {
           codexStuckCountRef.current = 0;
         }
-        
-        // Update last position
         codexLastPosRef.current = { x: codexPhysics.x, y: codexPhysics.y };
         
-        // Debug: log AI decision - more frequent for debugging
-        if (Math.random() < 0.1) {
-          const pathStep = codexPath[codexPathIndexRef.current];
-          const inputStr = [
-            input.left ? "L" : "", input.right ? "R" : "",
-            input.up ? "U" : "", input.down ? "D" : "",
-            input.jump ? "J" : ""
-          ].filter(Boolean).join("") || "-";
-          console.log("[AI]", codexPhysics.gravity,
-            "pos:", Math.round(codexCenterX), Math.round(codexCenterY),
-            "target:", Math.round(targetX), Math.round(targetY),
-            "dx:", dx.toFixed(0), "dy:", dy.toFixed(0),
-            "→ input:", inputStr,
-            pathStep ? `(path step ${codexPathIndexRef.current})` : "(direct)");
-        }
-        
-        // Jump if: path says jump, OR stuck, OR gravity transition, OR need to leave surface
+        // Auto-jump if stuck or needs transition (legacy BFS mode only)
         const isStuck = codexStuckCountRef.current > 10;
-        const shouldTriggerJump = (shouldJump || isStuck || needsGravityTransition || needsToLeaveSurface) && codexPhysics.grounded;
-        
-        // Extra safety: don't jump if already near edge of map
-        const nearEdge = codexPhysics.x < TILE * 2 || codexPhysics.x > (SHIP_W - 2) * TILE ||
-                         codexPhysics.y < TILE * 2 || codexPhysics.y > (SHIP_H - 2) * TILE;
-        
-        if (shouldTriggerJump && !nearEdge) {
-          input.jump = true;
-          if (isStuck) {
-            console.log("[AI] Stuck! Jumping to clear obstacle");
-            codexStuckCountRef.current = 0;
-          }
-          if (needsGravityTransition) {
-            console.log("[AI] Gravity transition needed:", codexPhysics.gravity, "→ jumping!");
-          }
-          if (needsToLeaveSurface) {
-            console.log("[AI] Target far perpendicular - jumping off surface! dist:", perpendicularDist.toFixed(0));
+        if ((shouldJump || isStuck || needsGravityTransition) && codexPhysics.grounded) {
+          const nearEdge = codexPhysics.x < TILE * 2 || codexPhysics.x > (SHIP_W - 2) * TILE ||
+                           codexPhysics.y < TILE * 2 || codexPhysics.y > (SHIP_H - 2) * TILE;
+          if (!nearEdge) input.jump = true;
+          // Debug logs only when recording
+          if (recording) {
+            if (isStuck) console.log("[AI] Stuck! Jumping");
+            if (needsGravityTransition) console.log("[AI] Gravity transition");
           }
         }
       }
@@ -789,70 +1112,227 @@ export default function ShipPage() {
       // Apply AI input
       codexInputRef.current = input;
       
-    }, 50); // AI runs at 20Hz
+      // === NIM AI: Follow player-clicked destination ===
+      const nimPhys = nimPhysicsRef.current;
+      const nimCenterX = nimPhys.x + nimPhys.width / 2;
+      const nimCenterY = nimPhys.y + nimPhys.height / 2;
+      const nimInput: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
+      
+      const dest = nimDestinationRef.current;
+      if (dest) {
+        // Debug: log Nim AI state when PATHS is ON (throttled)
+        nimDebugTickRef.current++;
+        const nimDebug = showPathsRef.current && (nimDebugTickRef.current % 5 === 0);
+        if (nimDebug) {
+          console.log("[NimDBG] dest", dest, "grounded", nimPhys.grounded, "grav", nimPhys.gravity,
+            "pathLen", nimCurrentPathRef.current.length,
+            "progress", nimPathProgressRef.current.toFixed(2),
+            "pos", { x: nimPhys.x.toFixed(1), y: nimPhys.y.toFixed(1), vx: nimPhys.vx.toFixed(2), vy: nimPhys.vy.toFixed(2) }
+          );
+        }
+        const destKey = `${dest.x},${dest.y}`;
+        if (nimDestKeyRef.current !== destKey) {
+          // New destination clicked — force a fresh plan
+          nimDestKeyRef.current = destKey;
+          nimCurrentPathRef.current = [];
+          nimPathProgressRef.current = 0;
+        }
+        // Only recalculate path if we have NO path (not while actively walking/jumping)
+        const hasActivePath = nimCurrentPathRef.current.length > 0 && 
+                             nimPathProgressRef.current < nimCurrentPathRef.current.length;
+        const needsRecalc = !hasActivePath && nimPhys.grounded;
+        
+        if (needsRecalc) {
+          if (nimDebug) console.log("[NimDBG] needsRecalc=true");
+          const nimTileX = Math.round(nimPhys.x / TILE);
+          const nimTileY = Math.round(nimPhys.y / TILE);
+          
+          const reachable = calculateReachableCells(
+            nimTileX,
+            nimTileY,
+            nimPhys.gravity as any,
+            shipGrid,
+            SOLID_TILES as string[]
+          );
+          
+          // Find best path to destination
+          let bestCell = null;
+          let minDist = Infinity;
+          for (const cell of reachable) {
+            const dist = Math.abs(cell.x - dest.x) + Math.abs(cell.y - dest.y);
+            if (dist < minDist) {
+              minDist = dist;
+              bestCell = cell;
+            }
+          }
+          
+          if (bestCell && bestCell.path.length > 0) {
+            // Always adopt the plan for the current destination (dest changes are handled above)
+            nimCurrentPathRef.current = bestCell.path;
+            nimPathProgressRef.current = 0;
+            if (nimDebug) console.log("[NimDBG] planned", { actions: bestCell.path.length, minDist });
+          } else {
+            if (nimDebug) console.log("[NimDBG] noPlan", { reachable: reachable.length, minDist });
+          }
+        }
+        
+        // If we couldn't find a plan yet, fall back to direct steering so Nim always moves.
+        if (nimCurrentPathRef.current.length === 0) {
+          const destCenterX = dest.x * TILE + TILE / 2;
+          const destCenterY = dest.y * TILE + TILE / 2;
+          const dx = destCenterX - nimCenterX;
+          const dy = destCenterY - nimCenterY;
+          const grav = nimPhys.gravity;
+          const closeEnough = Math.abs(dx) + Math.abs(dy) < TILE * 0.5;
+          if (closeEnough) {
+            setNimDestination(null);
+            nimDestinationRef.current = null;
+            nimDestKeyRef.current = null;
+          } else {
+            // Move laterally (perpendicular to gravity) toward destination
+            if (grav === "DOWN" || grav === "UP") {
+              if (dx > 2) nimInput.right = true;
+              else if (dx < -2) nimInput.left = true;
+            } else {
+              if (dy > 2) nimInput.down = true;
+              else if (dy < -2) nimInput.up = true;
+            }
+          }
+        }
+
+        // Execute current path — merge consecutive walks into smooth movement
+        if (nimCurrentPathRef.current.length > 0) {
+          if (nimDebug) {
+            const i = Math.floor(nimPathProgressRef.current);
+            const a = nimCurrentPathRef.current[i];
+            console.log("[NimDBG] exec", { index: i, action: a?.action, start: a?.start, landing: a?.landing });
+          }
+          const nimProgress = nimPathProgressRef.current;
+          const nimJumpIndex = Math.floor(nimProgress);
+          const nimIsMidJump = nimProgress % 1 === 0.5;
+          
+          if (nimJumpIndex < nimCurrentPathRef.current.length) {
+            const nimAction = nimCurrentPathRef.current[nimJumpIndex];
+            const nimGrav = nimPhys.gravity;
+            
+            // NOTE: Don’t invalidate the plan on “gravity mismatch” here.
+            // In practice this was killing Nim’s plan execution and making her appear stuck.
+            if (nimIsMidJump && nimPhys.grounded) {
+              // Landed from jump — advance to next action
+              nimPathProgressRef.current = nimJumpIndex + 1;
+            } else if (nimPhys.grounded) {
+              const isWalk = nimAction.action === "walk-left" || nimAction.action === "walk-right";
+              
+              if (isWalk) {
+                // MERGE consecutive walks: find the LAST walk in the same direction
+                let walkEndIndex = nimJumpIndex;
+                const walkDir = nimAction.action;
+                while (walkEndIndex + 1 < nimCurrentPathRef.current.length) {
+                  const nextAction = nimCurrentPathRef.current[walkEndIndex + 1];
+                  if (nextAction.action === walkDir) {
+                    walkEndIndex++;
+                  } else {
+                    break;
+                  }
+                }
+                
+                // Target is the FINAL cell of the merged walk
+                const finalAction = nimCurrentPathRef.current[walkEndIndex];
+                const finalTargetX = (finalAction.landing?.x ?? finalAction.start.x) * TILE + TILE / 2;
+                const finalTargetY = (finalAction.landing?.y ?? finalAction.start.y) * TILE + TILE / 2;
+                
+                // Distance for walk completion should be measured along the lateral axis only
+                // (walking is perpendicular to gravity).
+                const distToFinal = Math.abs((finalTargetX - nimCenterX) * getMoveRightVector(nimGrav).x + (finalTargetY - nimCenterY) * getMoveRightVector(nimGrav).y);
+                
+                // Check if we've passed the target (overshoot detection)
+                // IMPORTANT: walk-left/walk-right are GRAVITY-relative.
+                // So we must measure overshoot along the gravity-relative lateral axis (moveRightVec),
+                // not raw screen X.
+                const moveRight = getMoveRightVector(nimGrav);
+                const lateralDelta = (finalTargetX - nimCenterX) * moveRight.x + (finalTargetY - nimCenterY) * moveRight.y;
+                const isOvershot = (walkDir === "walk-right" && lateralDelta < -TILE * 0.3) ||
+                                   (walkDir === "walk-left" && lateralDelta > TILE * 0.3);
+                
+                if (Math.abs(lateralDelta) < TILE * 0.5 || isOvershot) {
+                  // Reached or passed the end of the merged walk — skip all walked steps
+                  nimPathProgressRef.current = walkEndIndex + 1;
+                } else {
+                  // Keep walking toward the final target
+                  if (walkDir === "walk-left") {
+                    if (nimGrav === "DOWN") nimInput.left = true;
+                    else if (nimGrav === "UP") nimInput.right = true;
+                    else if (nimGrav === "LEFT") nimInput.up = true;
+                    else if (nimGrav === "RIGHT") nimInput.down = true;
+                  } else {
+                    if (nimGrav === "DOWN") nimInput.right = true;
+                    else if (nimGrav === "UP") nimInput.left = true;
+                    else if (nimGrav === "LEFT") nimInput.down = true;
+                    else if (nimGrav === "RIGHT") nimInput.up = true;
+                  }
+                }
+              } else if (nimAction.action.startsWith("jump")) {
+                // Zero out lateral velocity before jumping so arc matches simulation
+                // (simulation assumes zero starting lateral speed)
+                const moveRight = getMoveRightVector(nimGrav);
+                const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
+                nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
+                nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
+                
+                // Apply lateral direction for the jump
+                if (nimAction.action === "jump-left") {
+                  if (nimGrav === "DOWN") nimInput.left = true;
+                  else if (nimGrav === "UP") nimInput.right = true;
+                  else if (nimGrav === "LEFT") nimInput.up = true;
+                  else if (nimGrav === "RIGHT") nimInput.down = true;
+                } else if (nimAction.action === "jump-right") {
+                  if (nimGrav === "DOWN") nimInput.right = true;
+                  else if (nimGrav === "UP") nimInput.left = true;
+                  else if (nimGrav === "LEFT") nimInput.down = true;
+                  else if (nimGrav === "RIGHT") nimInput.up = true;
+                }
+                // else: straight jump, no lateral input
+                nimInput.jump = true;
+                nimPathProgressRef.current = nimJumpIndex + 0.5;
+              }
+            }
+          } else {
+            // Reached end of path — stop moving
+            nimCurrentPathRef.current = [];
+            nimPathProgressRef.current = 0;
+            // Check if we're at the destination
+            const nimTileX = Math.round(nimPhys.x / TILE);
+            const nimTileY = Math.round(nimPhys.y / TILE);
+            if (dest) {
+              // Compare using CENTER-of-collider tile (more stable than top-left rounding)
+              const centerTileX = Math.floor((nimPhys.x + nimPhys.width / 2) / TILE);
+              const centerTileY = Math.floor((nimPhys.y + nimPhys.height / 2) / TILE);
+              if (centerTileX === dest.x && centerTileY === dest.y) {
+                setNimDestination(null);
+                nimDestinationRef.current = null;
+              }
+            }
+          }
+        }
+      }
+      
+      // Always apply input (empty = stop moving)
+      if (dest && showPathsRef.current && (nimDebugTickRef.current % 5 === 0)) {
+        console.log("[NimDBG] input", nimInput);
+      }
+      nimInputRef.current = nimInput;
+      
+    }, 200); // AI runs at 5Hz (was 20Hz) for performance
     
-    return () => clearInterval(aiInterval);
-  // NOTE: Empty deps - interval reads current state via closure refresh pattern
-  // The setCodexPhysics/setCharPhysics in the game loop ensure fresh values
-  }, []);
+    return () => {
+      clearInterval(aiInterval);
+      // Clear Nim input on cleanup so she doesn't keep drifting
+      nimInputRef.current = { up: false, down: false, left: false, right: false, jump: false };
+    };
+  }, [isReplaying]); // Stable interval; reads destination via nimDestinationRef
   
-  // Draw Nimbus
-  useEffect(() => {
-    if (!nimbusBaked || !charCanvasRef.current) return;
-    const ctx = charCanvasRef.current.getContext("2d");
-    if (!ctx) return;
-    
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 48, 48);
-    
-    ctx.save();
-    ctx.translate(24, 24);  // Canvas center
-    
-    // Smooth animated rotation around collision center
-    ctx.rotate(displayRotation * Math.PI / 180);
-    
-    // Flip for direction
-    if (charDir === "left") {
-      ctx.scale(-1, 1);
-    }
-    
-    // Draw sprite centered at the rotation point
-    ctx.drawImage(
-      nimbusBaked.canvas,
-      charFrame * 48, 0, 48, 48,
-      -24, -24, 48, 48
-    );
-    ctx.restore();
-  }, [nimbusBaked, charFrame, charDir, displayRotation]);
-  
-  // Draw Codex
-  useEffect(() => {
-    if (!codexBaked || !codexCanvasRef.current) return;
-    const ctx = codexCanvasRef.current.getContext("2d");
-    if (!ctx) return;
-    
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 48, 48);
-    
-    ctx.save();
-    ctx.translate(24, 24);  // Canvas center
-    
-    // Smooth animated rotation around collision center
-    ctx.rotate(codexDisplayRotation * Math.PI / 180);
-    
-    // Flip for direction
-    if (codexDir === "left") {
-      ctx.scale(-1, 1);
-    }
-    
-    // Draw sprite centered at the rotation point
-    ctx.drawImage(
-      codexBaked.canvas,
-      codexFrame * 48, 0, 48, 48,
-      -24, -24, 48, 48
-    );
-    ctx.restore();
-  }, [codexBaked, codexFrame, codexDir, codexDisplayRotation]);
+  // REMOVED: Old individual canvas drawing for Nimbus and Codex
+  // Characters now render via the single game canvas in renderGameCanvas()
 
   // Calculate character positions relative to viewport
   // Sprite is 48×48, collision is 32×44
@@ -863,34 +1343,24 @@ export default function ShipPage() {
   // to align the visual feet with collision floor-side
   const getSpriteOffset = (gravity: GravityDirection): { x: number; y: number } => {
     const spriteW = 48, spriteH = 48;
-    const collW = 32, collH = 44;
-    const extraW = (spriteW - collW) / 2;  // 8px
-    const extraH = (spriteW - collH) / 2;  // 2px (using spriteW for both since rotated sprite is square)
-    
+    const collW = PLAYER.COLLIDER_SIZE;
+    const collH = PLAYER.COLLIDER_SIZE;
+    const extraW = (spriteW - collW) / 2;
+
     switch (gravity) {
       case "DOWN":  // Feet at bottom - align sprite bottom with collision bottom
-        return { x: -extraW, y: -(spriteH - collH) };  // (-8, -4)
+        return { x: -extraW, y: -(spriteH - collH) };
       case "UP":    // Feet at top - align sprite top with collision top
-        return { x: -extraW, y: 0 };  // (-8, 0)
+        return { x: -extraW, y: 0 };
       case "LEFT":  // Feet at left - align sprite left with collision left
-        return { x: 0, y: -extraW };  // (0, -8)
+        return { x: 0, y: -extraW };
       case "RIGHT": // Feet at right - align sprite right with collision right
-        return { x: -(spriteW - collW), y: -extraW };  // (-16, -8)
+        return { x: -(spriteW - collW), y: -extraW };
     }
   };
   
-  const spriteOffset = getSpriteOffset(charPhysics.gravity);
-  // Snap character positions to integer pixels for crisp rendering
-  const charScreenX = Math.round(charPhysics.x - viewX * TILE + spriteOffset.x);
-  const charScreenY = Math.round(charPhysics.y - viewY * TILE + spriteOffset.y);
-  const charVisible = charScreenX > -48 && charScreenX < VIEW_W * TILE &&
-                      charScreenY > -48 && charScreenY < VIEW_H * TILE;
-  
-  const codexSpriteOffset = getSpriteOffset(codexPhysics.gravity);
-  const codexScreenX = Math.round(codexPhysics.x - viewX * TILE + codexSpriteOffset.x);
-  const codexScreenY = Math.round(codexPhysics.y - viewY * TILE + codexSpriteOffset.y);
-  const codexVisible = codexScreenX > -48 && codexScreenX < VIEW_W * TILE &&
-                       codexScreenY > -48 && codexScreenY < VIEW_H * TILE;
+  // REMOVED: Old DOM-based character screen position calculations
+  // Characters now render via game canvas using refs directly
 
   // Get visible portion of grid (use integer coords for slicing, +1 for partial tiles)
   const viewXInt = Math.floor(viewX);
@@ -906,6 +1376,376 @@ export default function ShipPage() {
     room.y + room.h > viewYInt && room.y < viewYInt + VIEW_H + 1
   );
 
+  // ============================================================
+  // CANVAS RENDER FUNCTION - Draws game world directly to canvas
+  // This runs at 60fps via requestAnimationFrame, NO React setState
+  // ============================================================
+  // Ref to always hold latest render function (avoids stale closure in rAF)
+  const renderGameCanvasRef = useRef<() => void>(() => {});
+  
+  const renderGameCanvas = useCallback(() => {
+    const canvas = gameCanvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    
+    // Pixel-perfect rendering (no anti-aliasing)
+    ctx.imageSmoothingEnabled = false;
+    
+    // Clear canvas
+    ctx.fillStyle = COLORS.space;
+    ctx.fillRect(0, 0, VIEW_W * TILE, VIEW_H * TILE);
+    
+    // Calculate viewport offset - snap to integer pixels (no sub-pixel rendering)
+    const offsetX = Math.round(-(viewXRef.current % 1) * TILE);
+    const offsetY = Math.round(-(viewYRef.current % 1) * TILE);
+    
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    
+    // Get visible tile range
+    const startTileX = Math.floor(viewXRef.current);
+    const startTileY = Math.floor(viewYRef.current);
+    const endTileX = Math.min(startTileX + VIEW_W + 1, SHIP_W);
+    const endTileY = Math.min(startTileY + VIEW_H + 1, SHIP_H);
+    
+    // Draw tiles
+    for (let ty = startTileY; ty < endTileY; ty++) {
+      for (let tx = startTileX; tx < endTileX; tx++) {
+        if (ty >= 0 && ty < SHIP_H && tx >= 0 && tx < SHIP_W) {
+          const cell = shipGrid[ty][tx];
+          const screenX = (tx - startTileX) * TILE;
+          const screenY = (ty - startTileY) * TILE;
+          
+          ctx.fillStyle = COLORS[cell as keyof typeof COLORS];
+          ctx.fillRect(screenX, screenY, TILE, TILE);
+          
+          // Draw grid overlay if enabled
+          if (showGrid) {
+            ctx.strokeStyle = "rgba(255,255,255,0.1)";
+            ctx.strokeRect(screenX, screenY, TILE, TILE);
+          }
+        }
+      }
+    }
+    
+    // Draw room labels
+    ctx.font = "8px 'Press Start 2P', monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const room of visibleRooms) {
+      const labelX = (room.x - startTileX + room.w / 2) * TILE;
+      const labelY = (room.y - startTileY + room.h / 2) * TILE;
+      if (labelX >= -TILE && labelX <= (VIEW_W + 1) * TILE &&
+          labelY >= -TILE && labelY <= (VIEW_H + 1) * TILE) {
+        ctx.fillStyle = room.type === "shaft" ? "#66ffff" : "#0f0";
+        ctx.fillText(room.name.toUpperCase(), labelX, labelY);
+      }
+    }
+    
+    // Draw paths if enabled
+    if (showPathsRef.current && codexPathRef.current.length > 1) {
+      ctx.strokeStyle = "#fb923c";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.beginPath();
+      for (let i = 0; i < codexPathRef.current.length; i++) {
+        const step = codexPathRef.current[i];
+        const px = (step.node.x - startTileX) * TILE + TILE / 2;
+        const py = (step.node.y - startTileY) * TILE + TILE / 2;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      // Draw path nodes
+      for (let i = 0; i < codexPathRef.current.length; i++) {
+        const step = codexPathRef.current[i];
+        const px = (step.node.x - startTileX) * TILE + TILE / 2;
+        const py = (step.node.y - startTileY) * TILE + TILE / 2;
+        ctx.beginPath();
+        ctx.arc(px, py, i === 0 ? 6 : 4, 0, Math.PI * 2);
+        ctx.fillStyle = step.action === "jump" ? "#ff6b6b" : "#fb923c";
+        ctx.fill();
+      }
+    }
+    
+    // Draw physics trajectories if enabled
+    if (showPhysicsPathsRef.current && physicsTrajectoriesRef.current.length > 0) {
+      ctx.strokeStyle = "#0f0";
+      ctx.lineWidth = 2;
+      for (const traj of physicsTrajectoriesRef.current) {
+        if (traj.trajectory.length > 1) {
+          ctx.beginPath();
+          for (let i = 0; i < traj.trajectory.length; i++) {
+            const point = traj.trajectory[i];
+            const px = point.x - startTileX * TILE;
+            const py = point.y - startTileY * TILE;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        // Draw landing marker
+        if (traj.landing) {
+          const lx = traj.landing.x * TILE + TILE / 2 - startTileX * TILE;
+          const ly = traj.landing.y * TILE + TILE / 2 - startTileY * TILE;
+          ctx.beginPath();
+          ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+          ctx.fillStyle = "#0f0";
+          ctx.fill();
+        }
+      }
+    }
+    
+    // Draw Nim's jump arcs when PHYS is ON
+    if (showPhysicsPathsRef.current) {
+      const nimTileX = Math.round(nimPhysicsRef.current.x / TILE);
+      const nimTileY = Math.round(nimPhysicsRef.current.y / TILE);
+      const nimTrajs = getJumpTrajectories(
+        nimTileX,
+        nimTileY,
+        nimPhysicsRef.current.gravity as any,
+        shipGrid,
+        SOLID_TILES
+      );
+      
+      // Draw all possible arcs in pink
+      ctx.strokeStyle = "#ff00aa";
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.4;
+      for (const traj of nimTrajs) {
+        if (traj.trajectory.length > 1) {
+          ctx.beginPath();
+          for (let i = 0; i < traj.trajectory.length; i++) {
+            const point = traj.trajectory[i];
+            const px = point.x - startTileX * TILE;
+            const py = point.y - startTileY * TILE;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1.0;
+      
+      // Draw the SELECTED jump from Nim's current path in bright yellow
+      if (nimCurrentPathRef.current.length > 0) {
+        const nimProgress = nimPathProgressRef.current;
+        const nimJumpIndex = Math.floor(nimProgress);
+        if (nimJumpIndex < nimCurrentPathRef.current.length) {
+          const selectedAction = nimCurrentPathRef.current[nimJumpIndex];
+          if (selectedAction.trajectory && selectedAction.trajectory.length > 1) {
+            ctx.strokeStyle = "#ffff00";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (let i = 0; i < selectedAction.trajectory.length; i++) {
+              const point = selectedAction.trajectory[i];
+              const px = point.x - startTileX * TILE;
+              const py = point.y - startTileY * TILE;
+              if (i === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+            
+            // Yellow landing marker
+            if (selectedAction.landing) {
+              const lx = selectedAction.landing.x * TILE + TILE / 2 - startTileX * TILE;
+              const ly = selectedAction.landing.y * TILE + TILE / 2 - startTileY * TILE;
+              ctx.beginPath();
+              ctx.arc(lx, ly, 6, 0, Math.PI * 2);
+              ctx.fillStyle = "#ffff00";
+              ctx.fill();
+            }
+          }
+        }
+      }
+    }
+    
+    // Draw debug tiles if enabled
+    if (showPathsRef.current && debugTilesRef.current) {
+      const { nimbus: nimbusDebug, codex: codexDebug } = debugTilesRef.current;
+      if (nimbusDebug) {
+        const dx = (nimbusDebug.x - startTileX) * TILE;
+        const dy = (nimbusDebug.y - startTileY) * TILE;
+        ctx.strokeStyle = "#4ade80";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 2]);
+        ctx.strokeRect(dx, dy, TILE, TILE);
+        ctx.setLineDash([]);
+        ctx.strokeRect(nimbusDebug.floorX * TILE - startTileX * TILE + 4, 
+                       nimbusDebug.floorY * TILE - startTileY * TILE + 4, 
+                       TILE - 8, TILE - 8);
+      }
+      if (codexDebug) {
+        const dx = (codexDebug.x - startTileX) * TILE;
+        const dy = (codexDebug.y - startTileY) * TILE;
+        ctx.strokeStyle = "#fb923c";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 2]);
+        ctx.strokeRect(dx, dy, TILE, TILE);
+        ctx.setLineDash([]);
+        ctx.strokeRect(codexDebug.floorX * TILE - startTileX * TILE + 4, 
+                       codexDebug.floorY * TILE - startTileY * TILE + 4, 
+                       TILE - 8, TILE - 8);
+      }
+    }
+    
+    // Draw characters
+    const drawCharacter = (
+      physics: PhysicsState, 
+      baked: BakedSprite | null, 
+      frame: number,
+      dir: "left" | "right",
+      rotation: number,
+      tint: string
+    ) => {
+      const spriteOffset = getSpriteOffset(physics.gravity);
+      const screenX = Math.round(physics.x - startTileX * TILE + spriteOffset.x);
+      const screenY = Math.round(physics.y - startTileY * TILE + spriteOffset.y);
+      
+      // Cull if off-screen
+      if (screenX < -48 || screenX > VIEW_W * TILE ||
+          screenY < -48 || screenY > VIEW_H * TILE) return;
+      
+      ctx.save();
+      ctx.translate(screenX + 24, screenY + 24);
+      ctx.rotate(rotation * Math.PI / 180);
+      if (dir === "left") ctx.scale(-1, 1);
+      
+      if (baked) {
+        ctx.drawImage(
+          baked.canvas,
+          frame * 48, 0, 48, 48,
+          -24, -24, 48, 48
+        );
+      } else {
+        // Fallback: draw colored rectangle while sprites load
+        ctx.fillStyle = tint;
+        ctx.fillRect(-12, -12, 24, 24);
+      }
+      ctx.restore();
+    };
+    
+    // Draw JP (Nimbus)
+    drawCharacter(
+      charPhysicsRef.current, 
+      nimbusBaked, 
+      charFrameRef.current,
+      charDirRef.current,
+      displayRotationRef.current,
+      "#4ade80"
+    );
+    
+    // Draw Codex
+    drawCharacter(
+      codexPhysicsRef.current,
+      codexBaked,
+      codexFrameRef.current,
+      codexDirRef.current,
+      codexDisplayRotationRef.current,
+      "#fb923c"
+    );
+    
+    // Draw Nim
+    drawCharacter(
+      nimPhysicsRef.current,
+      nimBaked,
+      nimFrameRef.current,
+      nimDirRef.current,
+      nimDisplayRotationRef.current,
+      "#ff00aa"
+    );
+    
+    // Draw Nim destination marker
+    if (nimDestinationRef.current) {
+      const destX = (nimDestinationRef.current.x - startTileX) * TILE;
+      const destY = (nimDestinationRef.current.y - startTileY) * TILE;
+      ctx.strokeStyle = "#ff00aa";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(destX, destY, TILE, TILE);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(255, 0, 170, 0.15)";
+      ctx.fillRect(destX, destY, TILE, TILE);
+      // Label
+      ctx.fillStyle = "#ff00aa";
+      ctx.font = "8px 'Press Start 2P', monospace";
+      ctx.fillText("DEST", destX, destY - 4);
+    }
+    
+    // Draw Nim planned path
+    if (nimCurrentPathRef.current.length > 0) {
+      ctx.strokeStyle = "#ff00aa";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      const nimStartX = nimPhysicsRef.current.x + nimPhysicsRef.current.width / 2 - startTileX * TILE;
+      const nimStartY = nimPhysicsRef.current.y + nimPhysicsRef.current.height / 2 - startTileY * TILE;
+      ctx.moveTo(nimStartX, nimStartY);
+      for (const step of nimCurrentPathRef.current) {
+        if (step.landing) {
+          const px = (step.landing.x + 0.5) * TILE - startTileX * TILE;
+          const py = (step.landing.y + 0.5) * TILE - startTileY * TILE;
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1.0;
+    }
+    
+    ctx.restore();
+  }, [nimbusBaked, codexBaked, nimBaked, visibleRooms, shipGrid]);
+  
+  // Keep ref in sync so rAF loop always calls the latest version
+  renderGameCanvasRef.current = renderGameCanvas;
+  
+  // Debug: log when sprites are loaded (remove after debugging)
+  useEffect(() => {
+    if (nimbusBaked && codexBaked && nimBaked) {
+      console.log("[Canvas] All sprites loaded!", {
+        nimbus: nimbusBaked.canvas.width,
+        codex: codexBaked.canvas.width,
+        nim: nimBaked.canvas.width,
+      });
+    }
+  }, [nimbusBaked, codexBaked, nimBaked]);
+
+  // Canvas render refs - read by renderGameCanvas() and rAF loop each frame
+  // These are the ONLY source of truth for visual state (no React state)
+  const charFrameRef = useRef(0);
+  const charDirRef = useRef<"left" | "right">("right");
+  const charAnimRef = useRef<"Idle" | "Run" | "Jump">("Idle");
+  const displayRotationRef = useRef(0);
+  const charTargetRotationRef = useRef(0);
+  const codexFrameRef = useRef(0);
+  const codexDirRef = useRef<"left" | "right">("left");
+  const codexAnimRef = useRef<"Idle" | "Run" | "Jump">("Idle");
+  const codexDisplayRotationRef = useRef(0);
+  const codexTargetRotationRef = useRef(0);
+  const nimFrameRef = useRef(0);
+  const nimDirRef = useRef<"left" | "right">("left");
+  const nimAnimRef = useRef<"Idle" | "Run" | "Jump">("Idle");
+  const nimDisplayRotationRef = useRef(0);
+  const nimTargetRotationRef = useRef(180); // Nim starts with UP gravity = 180deg
+  const showPathsRef = useRef(true);
+  const physicsTrajectoriesRef = useRef<JumpResult[]>([]);
+  const debugTilesRef = useRef<{
+    nimbus: { x: number; y: number; centerX: number; centerY: number; floorX: number; floorY: number } | null;
+    codex: { x: number; y: number; centerX: number; centerY: number; floorX: number; floorY: number } | null;
+  }>({ nimbus: null, codex: null });
+  
+  // Sprite sheet ref for rAF loop (avoid stale closure)
+  const sheetRef = useRef<SpriteSheet | null>(null);
+  useEffect(() => { sheetRef.current = sheet; }, [sheet]);
+  
+  // Sync UI toggle refs
+  useEffect(() => { showPathsRef.current = showPaths; }, [showPaths]);
+
   return (
     <div style={{
       minHeight: "100vh",
@@ -920,7 +1760,7 @@ export default function ShipPage() {
       </h1>
 
       {/* Controls */}
-      <div style={{ marginBottom: 20, display: "flex", gap: 10 }}>
+      <div style={{ marginBottom: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button
           onClick={() => setShowGrid(g => !g)}
           style={{
@@ -957,18 +1797,197 @@ export default function ShipPage() {
         >
           PATH {showPaths ? "ON" : "OFF"}
         </button>
+        <button
+          onClick={() => setShowPhysicsPaths(p => !p)}
+          style={{
+            padding: "4px 8px",
+            background: showPhysicsPaths ? "#0f0" : "#333",
+            color: showPhysicsPaths ? "#000" : "#0f0",
+            border: "1px solid #0f0",
+            cursor: "pointer",
+          }}
+        >
+          PHYS {showPhysicsPaths ? "ON" : "OFF"}
+        </button>
+        <button
+          onClick={() => setUsePhysicsAI(p => !p)}
+          style={{
+            padding: "4px 8px",
+            background: usePhysicsAI ? "#f0f" : "#333",
+            color: usePhysicsAI ? "#000" : "#f0f",
+            border: "1px solid #f0f",
+            cursor: "pointer",
+          }}
+        >
+          AI: {usePhysicsAI ? "PHYS" : "BFS"}
+        </button>
+        <button
+          onClick={() => {
+            if (recording) {
+              setRecording(false);
+              setGameMessage("⏹️ Recording stopped");
+            } else {
+              setRecording(true);
+              setMoveHistory([]);
+              recordingStartTime.current = Date.now();
+              setGameMessage("🔴 RECORDING - Move JP to catch Nim!");
+            }
+          }}
+          style={{
+            padding: "4px 8px",
+            background: recording ? "#f00" : "#333",
+            color: recording ? "#fff" : "#f00",
+            border: "1px solid #f00",
+            cursor: "pointer",
+          }}
+        >
+          {recording ? "⏹️ STOP" : "🔴 RECORD"}
+        </button>
+        <button
+          onClick={() => {
+            // Cancel any existing replay
+            if (replayIntervalRef.current) {
+              clearInterval(replayIntervalRef.current);
+              replayIntervalRef.current = null;
+            }
+            
+            if (isReplaying) {
+              setIsReplaying(false);
+              setGameMessage("⏹️ Replay stopped");
+              return;
+            }
+            
+            // Replay: Make CODEX follow recorded path
+            if (moveHistory.length === 0) {
+              setGameMessage("⚠️ No moves recorded yet!");
+              return;
+            }
+            
+            // Reset CODEX to start position
+            const firstMove = moveHistory[0];
+            setCodexPhysics({
+              x: firstMove.from.x * TILE,
+              y: firstMove.from.y * TILE - PLAYER.COLLIDER_SIZE,
+              vx: 0, vy: 0, gravity: "DOWN", grounded: true,
+              width: PLAYER.COLLIDER_SIZE, height: PLAYER.COLLIDER_SIZE, jumpHeld: false
+            });
+            
+            // Replay each move
+            setIsReplaying(true);
+            setGameMessage("▶️ REPLAYING JP's path...");
+            let moveIndex = 0;
+            
+            // Replay with smooth interpolation
+            const STEPS_PER_MOVE = 5; // Interpolate each move into 5 steps
+            const STEP_DURATION = 30; // 30ms per step = 150ms total per move
+            let stepIndex = 0;
+            
+            replayIntervalRef.current = setInterval(() => {
+              if (moveIndex >= moveHistory.length) {
+                clearInterval(replayIntervalRef.current!);
+                replayIntervalRef.current = null;
+                setIsReplaying(false);
+                setGameMessage("✅ Replay complete!");
+                return;
+              }
+              
+              const move = moveHistory[moveIndex];
+              const progress = stepIndex / STEPS_PER_MOVE;
+              
+              // Linear interpolation between from and to
+              const interpX = move.from.x + (move.to.x - move.from.x) * progress;
+              const interpY = move.from.y + (move.to.y - move.from.y) * progress;
+              
+              setCodexPhysics(prev => ({
+                ...prev,
+                x: interpX * TILE,
+                y: interpY * TILE - PLAYER.COLLIDER_SIZE,
+                gravity: "DOWN", 
+                grounded: progress > 0.8 || move.action !== "jump", // Show jump mid-air
+              }));
+              
+              stepIndex++;
+              if (stepIndex >= STEPS_PER_MOVE) {
+                stepIndex = 0;
+                moveIndex++;
+              }
+            }, STEP_DURATION);
+          }}
+          style={{
+            padding: "4px 8px",
+            background: isReplaying ? "#f00" : moveHistory.length > 0 ? "#0f0" : "#333",
+            color: isReplaying || moveHistory.length > 0 ? "#000" : "#0f0",
+            border: "1px solid #0f0",
+            cursor: moveHistory.length > 0 ? "pointer" : "not-allowed",
+          }}
+          disabled={moveHistory.length === 0 && !isReplaying}
+        >
+          {isReplaying ? "⏹️ STOP" : `▶️ REPLAY (${moveHistory.length})`}
+        </button>
+        <button
+          onClick={() => {
+            setNimDestination(null);
+            nimCurrentPathRef.current = [];
+          }}
+          style={{
+            padding: "4px 8px",
+            background: nimDestination ? "#f0f" : "#333",
+            color: nimDestination ? "#000" : "#f0f",
+            border: "1px solid #f0f",
+            cursor: "pointer",
+          }}
+        >
+          {nimDestination ? `Nim → (${nimDestination.x},${nimDestination.y})` : "Click to set Nim DEST"}
+        </button>
         <span style={{ color: "#666", alignSelf: "center" }}>
-          WASD move | Space = jump
+          WASD = move JP | Click = set Nim DEST | Space = jump
         </span>
         <span style={{ 
           color: charPhysics.grounded ? "#4ade80" : "#ff6b6b", 
           alignSelf: "center",
           marginLeft: "auto",
-          whiteSpace: "nowrap",  // Prevent wrapping
+          whiteSpace: "nowrap",
         }}>
           {charPhysics.gravity} | {charPhysics.grounded ? "🦶" : "🪂"}
         </span>
       </div>
+      
+      {gameMessage && (
+        <div style={{
+          marginBottom: 10,
+          padding: "8px 12px",
+          background: recording ? "#f001" : "#0f01",
+          border: `1px solid ${recording ? "#f00" : "#0f0"}`,
+          color: recording ? "#f00" : "#0f0",
+          fontSize: 10,
+        }}>
+          {gameMessage}
+        </div>
+      )}
+
+      {/* Move History Panel */}
+      {moveHistory.length > 0 && (
+        <div style={{
+          marginBottom: 10,
+          padding: "8px 12px",
+          background: "#1a1a2e",
+          border: "1px solid #0ff",
+          fontSize: 9,
+          maxHeight: 120,
+          overflow: "auto",
+        }}>
+          <div style={{ color: "#0ff", marginBottom: 4 }}>📜 MOVE HISTORY ({moveHistory.length} moves)</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {moveHistory.slice(-10).map((move, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, color: "#ccc" }}>
+                <span style={{ color: "#4ade80" }}>{move.action}</span>
+                <span>({move.from.x},{move.from.y}) → ({move.to.x},{move.to.y})</span>
+                <span style={{ color: "#666" }}>{move.time}ms</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Ship viewport */}
       <div 
@@ -980,67 +1999,143 @@ export default function ShipPage() {
           background: COLORS.space,
           border: "2px solid #00ffff",
           overflow: "hidden",
+          cursor: "crosshair",
         }}
         tabIndex={0}
-      >
-        {/* Tile container with pixel-snapped offset for smooth scrolling */}
-        <div style={{
-          position: "absolute",
-          transform: `translate(${-Math.floor((viewX % 1) * TILE)}px, ${-Math.floor((viewY % 1) * TILE)}px)`,
-        }}>
-          {/* Render visible cells */}
-          {visibleGrid.map((row, vy) => (
-            row.map((cell, vx) => (
-              <div
-                key={`${vx}-${vy}`}
-                style={{
-                  position: "absolute",
-                  left: vx * TILE,
-                  top: vy * TILE,
-                  width: TILE,
-                  height: TILE,
-                  background: COLORS[cell],
-                  boxSizing: "border-box",
-                  border: showGrid ? "1px solid rgba(255,255,255,0.1)" : "none",
-                }}
-              />
-            ))
-          ))}
-        </div>
-
-        {/* Room labels (positioned with pixel-snapped offset) */}
-        <div style={{
-          position: "absolute",
-          transform: `translate(${-Math.floor((viewX % 1) * TILE)}px, ${-Math.floor((viewY % 1) * TILE)}px)`,
-        }}>
-          {visibleRooms.map(room => {
-            const labelX = (room.x - viewXInt + room.w / 2) * TILE;
-            const labelY = (room.y - viewYInt + room.h / 2) * TILE;
-            if (labelX < 0 || labelX > (VIEW_W + 1) * TILE) return null;
-            if (labelY < 0 || labelY > (VIEW_H + 1) * TILE) return null;
-            return (
-              <div
-                key={room.name}
-                style={{
-                  position: "absolute",
-                  left: labelX,
-                  top: labelY,
-                  transform: "translate(-50%, -50%)",
-                  color: room.type === "shaft" ? "#66ffff" : "#0f0",
-                  fontSize: 8,
-                  opacity: 0.8,
-                  textShadow: "1px 1px 2px #000",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {room.name.toUpperCase()}
-              </div>
+        onClick={(e) => {
+          // Click to set NIM destination (pink character)
+          const rect = e.currentTarget.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const clickY = e.clientY - rect.top;
+          
+          // Convert to ship coordinates (camera is ref-driven; React viewX/viewY may be stale)
+          const shipX = viewXRef.current * TILE + clickX;
+          const shipY = viewYRef.current * TILE + clickY;
+          
+          const tileX = Math.floor(shipX / TILE);
+          const tileY = Math.floor(shipY / TILE);
+          
+          if (tileX >= 0 && tileX < SHIP_W && tileY >= 0 && tileY < SHIP_H) {
+            // Update both React state (for UI) and ref (for AI loop) immediately
+            nimDestinationRef.current = { x: tileX, y: tileY };
+            nimDestKeyRef.current = null; // force-plan on next AI tick
+            setNimDestination({ x: tileX, y: tileY });
+            nimCurrentPathRef.current = [];
+            nimPathProgressRef.current = 0;
+            
+            // Calculate physics-based path for Nim
+            const reachable = calculateReachableCells(
+              Math.round(nimPhysicsRef.current.x / TILE),
+              Math.round(nimPhysicsRef.current.y / TILE),
+              nimPhysicsRef.current.gravity as any,
+              shipGrid,
+              SOLID_TILES as string[]
             );
-          })}
-        </div>
+            
+            // Find best path to clicked destination
+            let bestCell = null;
+            let minDist = Infinity;
+            for (const cell of reachable) {
+              const dist = Math.abs(cell.x - tileX) + Math.abs(cell.y - tileY);
+              if (dist < minDist) {
+                minDist = dist;
+                bestCell = cell;
+              }
+            }
+            
+            if (bestCell && bestCell.path.length > 0) {
+              nimCurrentPathRef.current = bestCell.path;
+              nimPathProgressRef.current = 0;
+              setNimPath(bestCell.path.flatMap((jump: any): PathStep[] => {
+                if (!jump.landing) return [];
+                return [
+                  { node: { x: jump.start.x, y: jump.start.y, gravity: jump.start.gravity as GravityDir }, action: 'start' },
+                  { node: { x: jump.landing.x, y: jump.landing.y, gravity: jump.landing.gravity as GravityDir }, action: 'jump' }
+                ];
+              }));
+              console.log(`[Nim AI] Path to (${tileX}, ${tileY}): ${bestCell.path.length} actions`);
+            } else {
+              console.log(`[Nim AI] No path to (${tileX}, ${tileY})`);
+            }
+          }
+        }}
+      >
+        {/* GAME CANVAS - renders tiles, characters, paths at 60fps */}
+        <canvas
+          ref={gameCanvasRef}
+          width={VIEW_W * TILE}
+          height={VIEW_H * TILE}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: VIEW_W * TILE,
+            height: VIEW_H * TILE,
+            imageRendering: "pixelated",
+            zIndex: 20,
+          }}
+        />
         
-        {/* Path visualization */}
-        {showPaths && codexPath.length > 1 && (
+        {/* REMOVED: SVG path and trajectory overlays - now rendered on game canvas */}
+        
+        {/* Debug: Path segment viability */}
+        {showPaths && codexPathSegments.length > 0 && (
+          <div style={{
+            position: "absolute",
+            right: 8,
+            top: 8,
+            zIndex: 50,
+            maxWidth: 420,
+            maxHeight: 220,
+            overflow: "auto",
+            background: "rgba(0,0,0,0.75)",
+            border: "1px solid rgba(0,240,255,0.4)",
+            padding: 8,
+            fontSize: 10,
+            color: "#c7f9ff",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            pointerEvents: "none",
+          }}>
+            <div style={{ color: "#00f0ff", marginBottom: 6 }}>Codex path segments</div>
+            {codexPathSegments.slice(0, 40).map((s: any, i: number) => (
+              <div key={i} style={{
+                color: s.viability === "invalid" ? "#ff6b6b" : "#c7f9ff",
+                opacity: 0.95,
+                marginBottom: 2,
+              }}>
+                {String(i).padStart(2, "0")} {s.type ?? s.action} ({s.from.x},{s.from.y},{s.from.gravity},{s.from.jumpPhase ?? 0}) → ({s.to.x},{s.to.y},{s.to.gravity},{s.to.jumpPhase ?? 0})
+                {s.viability === "invalid" && s.reason ? ` — ${s.reason}` : ""}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* REMOVED: Debug tile SVG overlay - now rendered on game canvas */}
+        
+        {/* REMOVED: Old DOM character elements (Nimbus, Codex, Nim)
+            All characters now render via the game canvas */}
+        
+        {/* Nim Destination marker */}
+        {nimDestination && (
+          <div
+            style={{
+              position: "absolute",
+              left: (nimDestination.x - viewX) * TILE,
+              top: (nimDestination.y - viewY) * TILE,
+              width: TILE,
+              height: TILE,
+              border: "2px dashed #ff00aa",
+              background: "rgba(255, 0, 170, 0.2)",
+              pointerEvents: "none",
+              zIndex: 8,
+            }}
+          >
+            <span style={{ color: "#ff00aa", fontSize: 8, position: "absolute", top: -12 }}>DEST</span>
+          </div>
+        )}
+        
+        {/* Nim Path visualization */}
+        {showPhysicsPaths && nimPath.length > 1 && (
           <svg
             style={{
               position: "absolute",
@@ -1052,35 +2147,33 @@ export default function ShipPage() {
               zIndex: 5,
             }}
           >
-            {/* Codex path (orange) */}
             <polyline
-              points={codexPath.map(step => 
+              points={nimPath.map(step => 
                 `${step.node.x * TILE + TILE/2},${step.node.y * TILE + TILE/2}`
               ).join(" ")}
               fill="none"
-              stroke="#fb923c"
+              stroke="#ff00aa"
               strokeWidth="3"
-              strokeOpacity="0.7"
+              strokeOpacity="0.8"
               strokeLinecap="round"
               strokeLinejoin="round"
-              strokeDasharray="8,4"
+              strokeDasharray="6,3"
             />
-            {/* Path nodes */}
-            {codexPath.map((step, i) => (
+            {nimPath.map((step, i) => (
               <circle
                 key={i}
                 cx={step.node.x * TILE + TILE/2}
                 cy={step.node.y * TILE + TILE/2}
                 r={i === 0 ? 6 : 4}
-                fill={step.action === "jump" ? "#ff6b6b" : step.action === "fall" ? "#fbbf24" : "#fb923c"}
-                opacity="0.8"
+                fill={step.action === "jump" ? "#ff1493" : "#ff00aa"}
+                opacity="0.9"
               />
             ))}
           </svg>
         )}
         
-        {/* Debug: Tile position visualization */}
-        {showPaths && (
+        {/* JP Path visualization (REMOVED - JP is player controlled) */}
+        {false && jpPath.length > 1 && (
           <svg
             style={{
               position: "absolute",
@@ -1089,126 +2182,32 @@ export default function ShipPage() {
               width: SHIP_W * TILE,
               height: SHIP_H * TILE,
               pointerEvents: "none",
-              zIndex: 6,
+              zIndex: 5,
             }}
           >
-            {/* Nimbus tile box (green) */}
-            {debugTiles.nimbus && (
-              <>
-                {/* Standing tile (dashed) */}
-                <rect
-                  x={debugTiles.nimbus.x * TILE}
-                  y={debugTiles.nimbus.y * TILE}
-                  width={TILE}
-                  height={TILE}
-                  fill="rgba(74, 222, 128, 0.1)"
-                  stroke="#4ade80"
-                  strokeWidth="2"
-                  strokeDasharray="4,2"
-                />
-                {/* Floor tile that must be solid (solid outline) */}
-                <rect
-                  x={debugTiles.nimbus.floorX * TILE + 4}
-                  y={debugTiles.nimbus.floorY * TILE + 4}
-                  width={TILE - 8}
-                  height={TILE - 8}
-                  fill="none"
-                  stroke="#4ade80"
-                  strokeWidth="3"
-                />
-                {/* Triangle at center */}
-                <polygon
-                  points={`${debugTiles.nimbus.centerX},${debugTiles.nimbus.centerY - 6} ${debugTiles.nimbus.centerX - 5},${debugTiles.nimbus.centerY + 4} ${debugTiles.nimbus.centerX + 5},${debugTiles.nimbus.centerY + 4}`}
-                  fill="#4ade80"
-                />
-                {/* Line from center to tile center */}
-                <line
-                  x1={debugTiles.nimbus.centerX}
-                  y1={debugTiles.nimbus.centerY}
-                  x2={debugTiles.nimbus.x * TILE + TILE/2}
-                  y2={debugTiles.nimbus.y * TILE + TILE/2}
-                  stroke="#4ade80"
-                  strokeWidth="1"
-                  strokeDasharray="2,2"
-                />
-              </>
-            )}
-            {/* Codex tile box (orange) */}
-            {debugTiles.codex && (
-              <>
-                {/* Standing tile (dashed) */}
-                <rect
-                  x={debugTiles.codex.x * TILE}
-                  y={debugTiles.codex.y * TILE}
-                  width={TILE}
-                  height={TILE}
-                  fill="rgba(251, 146, 60, 0.1)"
-                  stroke="#fb923c"
-                  strokeWidth="2"
-                  strokeDasharray="4,2"
-                />
-                {/* Floor tile that must be solid (solid outline) */}
-                <rect
-                  x={debugTiles.codex.floorX * TILE + 4}
-                  y={debugTiles.codex.floorY * TILE + 4}
-                  width={TILE - 8}
-                  height={TILE - 8}
-                  fill="none"
-                  stroke="#fb923c"
-                  strokeWidth="3"
-                />
-                {/* Triangle at center */}
-                <polygon
-                  points={`${debugTiles.codex.centerX},${debugTiles.codex.centerY - 6} ${debugTiles.codex.centerX - 5},${debugTiles.codex.centerY + 4} ${debugTiles.codex.centerX + 5},${debugTiles.codex.centerY + 4}`}
-                  fill="#fb923c"
-                />
-                {/* Line from center to tile center */}
-                <line
-                  x1={debugTiles.codex.centerX}
-                  y1={debugTiles.codex.centerY}
-                  x2={debugTiles.codex.x * TILE + TILE/2}
-                  y2={debugTiles.codex.y * TILE + TILE/2}
-                  stroke="#fb923c"
-                  strokeWidth="1"
-                  strokeDasharray="2,2"
-                />
-              </>
-            )}
+            <polyline
+              points={jpPath.map(step => 
+                `${step.node.x * TILE + TILE/2},${step.node.y * TILE + TILE/2}`
+              ).join(" ")}
+              fill="none"
+              stroke="#4ade80"
+              strokeWidth="3"
+              strokeOpacity="0.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="8,4"
+            />
+            {jpPath.map((step, i) => (
+              <circle
+                key={i}
+                cx={step.node.x * TILE + TILE/2}
+                cy={step.node.y * TILE + TILE/2}
+                r={i === 0 ? 6 : 4}
+                fill={step.action === "jump" ? "#ff6b6b" : step.action === "fall" ? "#fbbf24" : "#4ade80"}
+                opacity="0.8"
+              />
+            ))}
           </svg>
-        )}
-        
-        {/* Nimbus (player) */}
-        {charVisible && (
-          <canvas
-            ref={charCanvasRef}
-            width={48}
-            height={48}
-            style={{
-              position: "absolute",
-              left: charScreenX,
-              top: charScreenY,
-              imageRendering: "pixelated",
-              pointerEvents: "none",
-              zIndex: 10,
-            }}
-          />
-        )}
-        
-        {/* Codex (AI chasing) */}
-        {codexVisible && (
-          <canvas
-            ref={codexCanvasRef}
-            width={48}
-            height={48}
-            style={{
-              position: "absolute",
-              left: codexScreenX,
-              top: codexScreenY,
-              imageRendering: "pixelated",
-              pointerEvents: "none",
-              zIndex: 10,
-            }}
-          />
         )}
       </div>
 
@@ -1267,6 +2266,17 @@ export default function ShipPage() {
             width: 6,
             height: 6,
             background: "#fb923c",
+            borderRadius: "50%",
+            transform: "translate(-50%, -50%)",
+          }} />
+          {/* Nim marker on minimap */}
+          <div style={{
+            position: "absolute",
+            left: (nimPhysics.x / TILE) * 4,
+            top: (nimPhysics.y / TILE) * 4,
+            width: 6,
+            height: 6,
+            background: "#ff00aa",
             borderRadius: "50%",
             transform: "translate(-50%, -50%)",
           }} />
@@ -1381,13 +2391,13 @@ export default function ShipPage() {
             onClick={() => {
               setCodexPhysics({
                 x: 13 * TILE,
-                y: 5 * TILE - 44,
+                y: 5 * TILE - PLAYER.COLLIDER_SIZE,
                 vx: 0,
                 vy: 0,
                 gravity: "DOWN",
                 grounded: true,
-                width: 32,
-                height: 44,
+                width: PLAYER.COLLIDER_SIZE,
+                height: PLAYER.COLLIDER_SIZE,
                 jumpHeld: false,
               });
               setCodexPath([]);

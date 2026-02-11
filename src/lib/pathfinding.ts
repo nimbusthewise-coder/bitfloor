@@ -9,10 +9,16 @@
 export type GravityDir = "DOWN" | "UP" | "LEFT" | "RIGHT";
 
 // A node in the pathfinding graph
+//
+// NOTE: jumpPhase expands the state-space so pathfinding can represent
+// grounded vs airborne (jumping/falling). This prevents impossible paths
+// like "walk down from ceiling into a shaft" without first leaving the surface.
 export interface PathNode {
   x: number;
   y: number;
   gravity: GravityDir;
+  /** 0 = grounded (canStand), 1..MAX_JUMP_PHASE = rising, >MAX_JUMP_PHASE = falling */
+  jumpPhase?: number;
 }
 
 // An edge represents a possible movement
@@ -27,15 +33,40 @@ export interface PathStep {
   action: "start" | "walk" | "jump" | "fall" | "step";
 }
 
+const MAX_JUMP_PHASE = 6;
+const MAX_FALL_PHASE = 20; // cap falling exploration to keep the graph finite
+
+export type MovementAction = "walk" | "jump" | "fall" | "step";
+export type MovementMap = Map<string, { node: PathNode; action: MovementAction }[]>;
+
+export type SegmentViability = "ok" | "invalid";
+export type SegmentType = "walk" | "step" | "jump" | "fall" | "jumpAcross" | "invalid";
+
+export interface PathSegment {
+  from: PathNode;
+  to: PathNode;
+  action: MovementAction;
+  /** Higher-level label for debugging: e.g. jumpAcross when gravity changes on a stick/land */
+  type: SegmentType;
+  viability: SegmentViability;
+  reason?: string;
+}
+
 // Serialize node for use as map key
 function nodeKey(node: PathNode): string {
-  return `${node.x},${node.y},${node.gravity}`;
+  const jp = node.jumpPhase ?? 0;
+  return `${node.x},${node.y},${node.gravity},${jp}`;
 }
 
 // Parse node from key
 function parseKey(key: string): PathNode {
-  const [x, y, gravity] = key.split(",");
-  return { x: parseInt(x), y: parseInt(y), gravity: gravity as GravityDir };
+  const [x, y, gravity, jp] = key.split(",");
+  return {
+    x: parseInt(x),
+    y: parseInt(y),
+    gravity: gravity as GravityDir,
+    jumpPhase: jp ? parseInt(jp) : 0,
+  };
 }
 
 // Check if a cell is solid
@@ -290,6 +321,125 @@ function getStepNeighbors(
   return neighbors;
 }
 
+// Determine gravity dir that points *toward* a solid surface we collide with.
+function gravityToward(dx: number, dy: number): GravityDir {
+  if (dy < 0) return "UP";
+  if (dy > 0) return "DOWN";
+  if (dx < 0) return "LEFT";
+  return "RIGHT";
+}
+
+function isAirCell(
+  grid: string[][],
+  x: number,
+  y: number,
+  solidTypes: string[]
+): boolean {
+  return isEmpty(grid, x, y, solidTypes);
+}
+
+// Airborne neighbors: simulate jump rise then fall one tile at a time.
+function getAirNeighbors(
+  node: PathNode,
+  grid: string[][],
+  solidTypes: string[]
+): { node: PathNode; action: "jump" | "fall" }[] {
+  const neighbors: { node: PathNode; action: "jump" | "fall" }[] = [];
+  const jp = node.jumpPhase ?? 0;
+  const floor = getFloorOffset(node.gravity);
+  const jumpDir = { dx: -floor.dx, dy: -floor.dy };
+
+  // Rising phase
+  if (jp > 0 && jp <= MAX_JUMP_PHASE) {
+    const laterals = getLateralDirs(node.gravity);
+
+    // 1) Move one tile along jump direction ("up" relative to gravity)
+    const nextX = node.x + jumpDir.dx;
+    const nextY = node.y + jumpDir.dy;
+
+    // If we collide with a solid in jump direction, we can "stick" to it (gravity changes)
+    if (isSolid(grid, nextX, nextY, solidTypes)) {
+      const newGravity = gravityToward(jumpDir.dx, jumpDir.dy);
+      if (canStand(grid, node.x, node.y, newGravity, solidTypes)) {
+        neighbors.push({ node: { x: node.x, y: node.y, gravity: newGravity, jumpPhase: 0 }, action: "jump" });
+      }
+    } else if (isAirCell(grid, nextX, nextY, solidTypes)) {
+      const nextPhase = jp + 1;
+      // After the apex, we transition into falling.
+      const nextJumpPhase = nextPhase > MAX_JUMP_PHASE ? MAX_JUMP_PHASE + 1 : nextPhase;
+      neighbors.push({ node: { x: nextX, y: nextY, gravity: node.gravity, jumpPhase: nextJumpPhase }, action: "jump" });
+    }
+
+    // 2) Air control: allow drifting laterally while rising
+    for (const lat of laterals) {
+      const driftX = node.x + lat.dx;
+      const driftY = node.y + lat.dy;
+
+      // Stick to a wall mid-air if adjacent solid laterally
+      if (isSolid(grid, driftX, driftY, solidTypes)) {
+        const wallGravity = gravityToward(lat.dx, lat.dy);
+        if (canStand(grid, node.x, node.y, wallGravity, solidTypes)) {
+          neighbors.push({ node: { x: node.x, y: node.y, gravity: wallGravity, jumpPhase: 0 }, action: "jump" });
+        }
+        continue;
+      }
+
+      if (isAirCell(grid, driftX, driftY, solidTypes)) {
+        const nextPhase = jp + 1;
+        const nextJumpPhase = nextPhase > MAX_JUMP_PHASE ? MAX_JUMP_PHASE + 1 : nextPhase;
+        neighbors.push({ node: { x: driftX, y: driftY, gravity: node.gravity, jumpPhase: nextJumpPhase }, action: "jump" });
+      }
+    }
+
+    return neighbors;
+  }
+
+  // Falling phase (jp > MAX_JUMP_PHASE)
+  if (jp > MAX_JUMP_PHASE) {
+    // Cap falling exploration so the graph stays finite.
+    if (jp >= MAX_JUMP_PHASE + MAX_FALL_PHASE) return neighbors;
+
+    const laterals = getLateralDirs(node.gravity);
+
+    // 1) Move one tile along gravity direction
+    const nextX = node.x + floor.dx;
+    const nextY = node.y + floor.dy;
+
+    // Land when the next cell in gravity direction is solid.
+    if (isSolid(grid, nextX, nextY, solidTypes)) {
+      if (canStand(grid, node.x, node.y, node.gravity, solidTypes)) {
+        neighbors.push({ node: { x: node.x, y: node.y, gravity: node.gravity, jumpPhase: 0 }, action: "fall" });
+      }
+      return neighbors;
+    }
+
+    if (isAirCell(grid, nextX, nextY, solidTypes)) {
+      neighbors.push({ node: { x: nextX, y: nextY, gravity: node.gravity, jumpPhase: jp + 1 }, action: "fall" });
+    }
+
+    // 2) Air control: allow drifting laterally while falling
+    for (const lat of laterals) {
+      const driftX = node.x + lat.dx;
+      const driftY = node.y + lat.dy;
+
+      // Stick to a wall mid-air if adjacent solid laterally
+      if (isSolid(grid, driftX, driftY, solidTypes)) {
+        const wallGravity = gravityToward(lat.dx, lat.dy);
+        if (canStand(grid, node.x, node.y, wallGravity, solidTypes)) {
+          neighbors.push({ node: { x: node.x, y: node.y, gravity: wallGravity, jumpPhase: 0 }, action: "jump" });
+        }
+        continue;
+      }
+
+      if (isAirCell(grid, driftX, driftY, solidTypes)) {
+        neighbors.push({ node: { x: driftX, y: driftY, gravity: node.gravity, jumpPhase: jp + 1 }, action: "fall" });
+      }
+    }
+  }
+
+  return neighbors;
+}
+
 // Get all neighbors of a node (walk + jump + fall + step)
 export function getNeighbors(
   node: PathNode,
@@ -297,52 +447,246 @@ export function getNeighbors(
   solidTypes: string[]
 ): { node: PathNode; action: "walk" | "jump" | "fall" | "step" }[] {
   const neighbors: { node: PathNode; action: "walk" | "jump" | "fall" | "step" }[] = [];
-  
-  // Walking neighbors
+  const jp = node.jumpPhase ?? 0;
+
+  // Airborne: only simulate jump/fall progression.
+  if (jp > 0) {
+    for (const n of getAirNeighbors(node, grid, solidTypes)) {
+      neighbors.push(n);
+    }
+    return neighbors;
+  }
+
+  // Grounded neighbors
   for (const n of getWalkNeighbors(node, grid, solidTypes)) {
-    neighbors.push({ node: n, action: "walk" });
+    neighbors.push({ node: { ...n, jumpPhase: 0 }, action: "walk" });
   }
-  
-  // Jump neighbors (gravity changes)
-  for (const n of getJumpNeighbors(node, grid, solidTypes)) {
-    neighbors.push({ node: n, action: "jump" });
+
+  // Jump start: instead of teleporting to a landing spot, enter airborne state.
+  // (This replaces the old simplified jump neighbor model.)
+  const floor = getFloorOffset(node.gravity);
+  const jumpDir = { dx: -floor.dx, dy: -floor.dy };
+  const upX = node.x + jumpDir.dx;
+  const upY = node.y + jumpDir.dy;
+  if (isAirCell(grid, upX, upY, solidTypes)) {
+    neighbors.push({ node: { x: upX, y: upY, gravity: node.gravity, jumpPhase: 1 }, action: "jump" });
   }
-  
-  // Fall neighbors
-  for (const n of getFallNeighbors(node, grid, solidTypes)) {
-    neighbors.push({ node: n, action: "fall" });
+
+  // Fall start: if there is no floor, enter falling state.
+  const downX = node.x + floor.dx;
+  const downY = node.y + floor.dy;
+  if (!isSolid(grid, downX, downY, solidTypes)) {
+    if (isAirCell(grid, downX, downY, solidTypes)) {
+      neighbors.push({ node: { x: downX, y: downY, gravity: node.gravity, jumpPhase: MAX_JUMP_PHASE + 1 }, action: "fall" });
+    }
   }
-  
+
   // Step neighbors (1-tile height changes)
   for (const n of getStepNeighbors(node, grid, solidTypes)) {
-    neighbors.push({ node: n, action: "step" });
+    neighbors.push({ node: { ...n, jumpPhase: 0 }, action: "step" });
   }
-  
+
   return neighbors;
+}
+
+/**
+ * Precompute movement transitions for the entire ship.
+ *
+ * This builds an adjacency list for the full (x,y,gravity,jumpPhase) state space,
+ * capped by MAX_JUMP_PHASE + MAX_FALL_PHASE for airborne exploration.
+ */
+export function precomputeMovements(
+  grid: string[][],
+  solidTypes: string[]
+): MovementMap {
+  const map: MovementMap = new Map();
+  const gravities: GravityDir[] = ["DOWN", "UP", "LEFT", "RIGHT"];
+
+  const maxPhase = MAX_JUMP_PHASE + MAX_FALL_PHASE;
+
+  for (let y = 0; y < grid.length; y++) {
+    for (let x = 0; x < grid[0].length; x++) {
+      for (const gravity of gravities) {
+        for (let jumpPhase = 0; jumpPhase <= maxPhase; jumpPhase++) {
+          // Only include grounded nodes that are actually standable.
+          if (jumpPhase === 0 && !canStand(grid, x, y, gravity, solidTypes)) continue;
+          // Only include airborne nodes that are in empty space.
+          if (jumpPhase > 0 && !isEmpty(grid, x, y, solidTypes)) continue;
+
+          const node: PathNode = { x, y, gravity, jumpPhase };
+          const neighbors = getNeighbors(node, grid, solidTypes);
+          map.set(nodeKey(node), neighbors);
+        }
+      }
+    }
+  }
+
+  return map;
 }
 
 /**
  * BFS Pathfinding
  * Finds the shortest path from start to goal considering gravity
  */
+export function transitionKey(from: PathNode, to: PathNode): string {
+  return `${nodeKey(from)}->${nodeKey(to)}`;
+}
+
+function canExecuteSegment(
+  grid: string[][],
+  solidTypes: string[],
+  seg: { from: PathNode; to: PathNode; action: MovementAction }
+): { ok: true } | { ok: false; reason: string } {
+  const fromJP = seg.from.jumpPhase ?? 0;
+  const toJP = seg.to.jumpPhase ?? 0;
+
+  const dx = seg.to.x - seg.from.x;
+  const dy = seg.to.y - seg.from.y;
+
+  if (seg.action === "walk") {
+    if (fromJP !== 0 || toJP !== 0) return { ok: false, reason: "walk while airborne" };
+    if (seg.from.gravity !== seg.to.gravity) return { ok: false, reason: "walk changed gravity" };
+    const laterals = getLateralDirs(seg.from.gravity);
+    const ok = laterals.some((d) => d.dx === dx && d.dy === dy);
+    if (!ok) return { ok: false, reason: `walk moved (${dx},${dy}) not lateral` };
+    if (!canStand(grid, seg.to.x, seg.to.y, seg.to.gravity, solidTypes)) return { ok: false, reason: "walk to non-standable" };
+    return { ok: true };
+  }
+
+  if (seg.action === "step") {
+    if (fromJP !== 0 || toJP !== 0) return { ok: false, reason: "step while airborne" };
+    if (seg.from.gravity !== seg.to.gravity) return { ok: false, reason: "step changed gravity" };
+    const laterals = getLateralDirs(seg.from.gravity);
+    const floor = getFloorOffset(seg.from.gravity);
+    const ok = laterals.some((lat) =>
+      (dx === lat.dx - floor.dx && dy === lat.dy - floor.dy) ||
+      (dx === lat.dx + floor.dx && dy === lat.dy + floor.dy)
+    );
+    if (!ok) return { ok: false, reason: `step moved (${dx},${dy}) not step pattern` };
+    if (!canStand(grid, seg.to.x, seg.to.y, seg.to.gravity, solidTypes)) return { ok: false, reason: "step to non-standable" };
+    return { ok: true };
+  }
+
+  if (seg.action === "jump") {
+    const floor = getFloorOffset(seg.from.gravity);
+    const jumpDir = { dx: -floor.dx, dy: -floor.dy };
+
+    // Start jump: grounded -> airborne(1) moving one tile along jumpDir
+    if (fromJP === 0 && toJP === 1) {
+      if (dx !== jumpDir.dx || dy !== jumpDir.dy) return { ok: false, reason: "jump start not along jumpDir" };
+      if (!isEmpty(grid, seg.to.x, seg.to.y, solidTypes)) return { ok: false, reason: "jump start into solid" };
+
+      // Heuristic/viability rule: pure vertical jump segments that do not reach any
+      // collision surface within the next few tiles are considered non-walkable.
+      // This forces the solver to walk laterally to an edge/opening first.
+      const isScreenVerticalJump = dx === 0;
+      if (isScreenVerticalJump) {
+        let foundSurfaceSoon = false;
+        for (let dist = 1; dist <= 3; dist++) {
+          const cx = seg.from.x + jumpDir.dx * dist;
+          const cy = seg.from.y + jumpDir.dy * dist;
+          if (isSolid(grid, cx, cy, solidTypes)) {
+            foundSurfaceSoon = true;
+            break;
+          }
+        }
+        if (!foundSurfaceSoon) {
+          return { ok: false, reason: "vertical jump: no collision surface within 3 tiles" };
+        }
+      }
+
+      return { ok: true };
+    }
+
+    // Rising continuation: airborne -> airborne, moving either along jumpDir or laterally (air control)
+    if (fromJP > 0 && fromJP <= MAX_JUMP_PHASE && toJP > 0) {
+      const laterals = getLateralDirs(seg.from.gravity);
+      const isJumpDir = dx === jumpDir.dx && dy === jumpDir.dy;
+      const isLateral = laterals.some((d) => d.dx === dx && d.dy === dy);
+      if (!isJumpDir && !isLateral) return { ok: false, reason: "jump rise moved in invalid direction" };
+      if (!isEmpty(grid, seg.to.x, seg.to.y, solidTypes)) return { ok: false, reason: "jump rise into solid" };
+      return { ok: true };
+    }
+
+    // Stick/land from airborne: same tile, gravity can change, to grounded
+    if (fromJP > 0 && toJP === 0) {
+      if (dx !== 0 || dy !== 0) return { ok: false, reason: "airborne->grounded should not move tiles" };
+      if (!canStand(grid, seg.to.x, seg.to.y, seg.to.gravity, solidTypes)) return { ok: false, reason: "airborne->grounded not standable" };
+      return { ok: true };
+    }
+
+    return { ok: false, reason: `unexpected jump phase transition ${fromJP}->${toJP}` };
+  }
+
+  if (seg.action === "fall") {
+    const floor = getFloorOffset(seg.from.gravity);
+
+    // Start fall: grounded -> falling (first fall step moves one tile along gravity)
+    if (fromJP === 0 && toJP === MAX_JUMP_PHASE + 1) {
+      if (dx !== floor.dx || dy !== floor.dy) return { ok: false, reason: "fall start not along gravity" };
+      if (!isEmpty(grid, seg.to.x, seg.to.y, solidTypes)) return { ok: false, reason: "fall start into solid" };
+      return { ok: true };
+    }
+
+    // Falling continuation: falling -> falling, move one tile along gravity or laterally (air control)
+    if (fromJP > MAX_JUMP_PHASE && toJP > MAX_JUMP_PHASE) {
+      const laterals = getLateralDirs(seg.from.gravity);
+      const isGrav = dx === floor.dx && dy === floor.dy;
+      const isLateral = laterals.some((d) => d.dx === dx && d.dy === dy);
+      if (!isGrav && !isLateral) return { ok: false, reason: "fall moved in invalid direction" };
+      if (!isEmpty(grid, seg.to.x, seg.to.y, solidTypes)) return { ok: false, reason: "fall into solid" };
+      return { ok: true };
+    }
+
+    // Land: falling -> grounded at same tile
+    if (fromJP > MAX_JUMP_PHASE && toJP === 0) {
+      if (dx !== 0 || dy !== 0) return { ok: false, reason: "fall->grounded should not move tiles" };
+      if (!canStand(grid, seg.to.x, seg.to.y, seg.to.gravity, solidTypes)) return { ok: false, reason: "fall->grounded not standable" };
+      return { ok: true };
+    }
+
+    return { ok: false, reason: `unexpected fall phase transition ${fromJP}->${toJP}` };
+  }
+
+  return { ok: false, reason: "unknown action" };
+}
+
+function toSegments(path: PathStep[]): { from: PathNode; to: PathNode; action: MovementAction }[] {
+  const segs: { from: PathNode; to: PathNode; action: MovementAction }[] = [];
+  for (let i = 1; i < path.length; i++) {
+    const action = path[i].action;
+    if (action === "start") continue;
+    segs.push({
+      from: path[i - 1].node,
+      to: path[i].node,
+      action: action === "step" ? "step" : action === "walk" ? "walk" : action === "jump" ? "jump" : "fall",
+    });
+  }
+  return segs;
+}
+
 export function findPath(
   grid: string[][],
   solidTypes: string[],
   start: PathNode,
-  goal: { x: number; y: number; gravity?: GravityDir }
+  goal: { x: number; y: number; gravity?: GravityDir },
+  movementMap?: MovementMap,
+  blockedTransitions?: Set<string>
 ): PathStep[] | null {
-  // Validate start position
-  if (!canStand(grid, start.x, start.y, start.gravity, solidTypes)) {
-    console.warn("Invalid start position:", start);
+  const startNode: PathNode = { ...start, jumpPhase: start.jumpPhase ?? 0 };
+
+  // Validate start position (must be grounded and standable)
+  if ((startNode.jumpPhase ?? 0) !== 0 || !canStand(grid, startNode.x, startNode.y, startNode.gravity, solidTypes)) {
+    console.warn("Invalid start position:", startNode);
     return null;
   }
   
   // BFS setup
   const visited = new Set<string>();
   const parent = new Map<string, { node: PathNode; action: "walk" | "jump" | "fall" | "step" }>();
-  const queue: PathNode[] = [start];
+  const queue: PathNode[] = [startNode];
   
-  visited.add(nodeKey(start));
+  visited.add(nodeKey(startNode));
   
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -354,12 +698,14 @@ export function findPath(
     if (current.x === goal.x && current.y === goal.y) {
       if (!goal.gravity || current.gravity === goal.gravity) {
         // Reconstruct path
-        return reconstructPath(start, current, parent);
+        return reconstructPath(startNode, current, parent);
       }
     }
     
     // Explore neighbors
-    for (const { node: neighbor, action } of getNeighbors(current, grid, solidTypes)) {
+    const neighborList = movementMap ? (movementMap.get(nodeKey(current)) ?? []) : getNeighbors(current, grid, solidTypes);
+    for (const { node: neighbor, action } of neighborList) {
+      if (blockedTransitions && blockedTransitions.has(transitionKey(current, neighbor))) continue;
       const neighborKey = nodeKey(neighbor);
       
       if (!visited.has(neighborKey)) {
@@ -409,14 +755,174 @@ export function findPathBetweenPositions(
   startGravity: GravityDir,
   goalX: number,
   goalY: number,
-  goalGravity?: GravityDir
+  goalGravity?: GravityDir,
+  movementMap?: MovementMap
 ): PathStep[] | null {
   return findPath(
     grid,
     solidTypes,
     { x: startX, y: startY, gravity: startGravity },
-    { x: goalX, y: goalY, gravity: goalGravity }
+    { x: goalX, y: goalY, gravity: goalGravity },
+    movementMap
   );
+}
+
+/**
+ * Iterative refinement: if a path contains an invalid transition, block that
+ * specific transition and retry.
+ */
+export function findExecutablePath(
+  grid: string[][],
+  solidTypes: string[],
+  start: PathNode,
+  goal: { x: number; y: number; gravity?: GravityDir },
+  movementMap: MovementMap,
+  blockedTransitions: Set<string> = new Set(),
+  maxRetries: number = 30
+): { path: PathStep[]; segments: PathSegment[] } | null {
+  if (maxRetries <= 0) return null;
+
+  const path = findPath(grid, solidTypes, start, goal, movementMap, blockedTransitions);
+  if (!path) return null;
+
+  const segmentsRaw = toSegments(path);
+  const segments: PathSegment[] = segmentsRaw.map((s) => {
+    const exec = canExecuteSegment(grid, solidTypes, s);
+    const fromJP = s.from.jumpPhase ?? 0;
+    const toJP = s.to.jumpPhase ?? 0;
+
+    // Higher-level classification
+    let type: SegmentType = s.action;
+    if (s.action === "jump" && fromJP > 0 && toJP === 0 && s.from.gravity !== s.to.gravity) {
+      type = "jumpAcross";
+    }
+
+    if (!exec.ok) type = "invalid";
+
+    return exec.ok
+      ? { ...s, type, viability: "ok" }
+      : { ...s, type, viability: "invalid", reason: exec.reason };
+  });
+
+  const bad = segments.find((s) => s.viability === "invalid");
+  if (!bad) return { path, segments };
+
+  blockedTransitions.add(transitionKey(bad.from, bad.to));
+  return findExecutablePath(grid, solidTypes, start, goal, movementMap, blockedTransitions, maxRetries - 1);
+}
+
+export function buildPathSegments(
+  grid: string[][],
+  solidTypes: string[],
+  path: PathStep[]
+): PathSegment[] {
+  const segmentsRaw = toSegments(path);
+  return segmentsRaw.map((s) => {
+    const exec = canExecuteSegment(grid, solidTypes, s);
+    const fromJP = s.from.jumpPhase ?? 0;
+    const toJP = s.to.jumpPhase ?? 0;
+
+    let type: SegmentType = s.action;
+    if (s.action === "jump" && fromJP > 0 && toJP === 0 && s.from.gravity !== s.to.gravity) {
+      type = "jumpAcross";
+    }
+
+    if (!exec.ok) type = "invalid";
+
+    return exec.ok
+      ? { ...s, type, viability: "ok" }
+      : { ...s, type, viability: "invalid", reason: exec.reason };
+  });
+}
+
+export interface IncrementalSearchState {
+  start: PathNode;
+  goal: { x: number; y: number; gravity?: GravityDir };
+  visited: Set<string>;
+  parent: Map<string, { node: PathNode; action: MovementAction }>;
+  queue: PathNode[];
+  done: boolean;
+  foundKey?: string;
+}
+
+export function createIncrementalSearch(
+  start: PathNode,
+  goal: { x: number; y: number; gravity?: GravityDir }
+): IncrementalSearchState {
+  const s: PathNode = { ...start, jumpPhase: start.jumpPhase ?? 0 };
+  return {
+    start: s,
+    goal,
+    visited: new Set([nodeKey(s)]),
+    parent: new Map(),
+    queue: [s],
+    done: false,
+    foundKey: undefined,
+  };
+}
+
+function matchesGoal(node: PathNode, goal: { x: number; y: number; gravity?: GravityDir }): boolean {
+  if (node.x !== goal.x || node.y !== goal.y) return false;
+  if (goal.gravity && node.gravity !== goal.gravity) return false;
+  // We only consider goal reached when grounded.
+  if ((node.jumpPhase ?? 0) !== 0) return false;
+  return true;
+}
+
+export function stepIncrementalSearch(
+  state: IncrementalSearchState,
+  grid: string[][],
+  solidTypes: string[],
+  movementMap: MovementMap,
+  blockedTransitions: Set<string>,
+  budget: number
+): { status: "searching" } | { status: "found"; path: PathStep[]; segments: PathSegment[] } | { status: "not_found" } {
+  if (state.done) {
+    if (state.foundKey) {
+      const goalNode = parseKey(state.foundKey);
+      const path = reconstructPath(state.start, goalNode, state.parent as any);
+      return { status: "found", path, segments: buildPathSegments(grid, solidTypes, path) };
+    }
+    return { status: "not_found" };
+  }
+
+  for (let i = 0; i < budget; i++) {
+    const current = state.queue.shift();
+    if (!current) {
+      state.done = true;
+      state.foundKey = undefined;
+      return { status: "not_found" };
+    }
+
+    if (matchesGoal(current, state.goal)) {
+      state.done = true;
+      state.foundKey = nodeKey(current);
+      const path = reconstructPath(state.start, current, state.parent as any);
+      return { status: "found", path, segments: buildPathSegments(grid, solidTypes, path) };
+    }
+
+    const neighbors = movementMap.get(nodeKey(current)) ?? [];
+    for (const { node: neighbor, action } of neighbors) {
+      // skip blocked transitions
+      const tKey = transitionKey(current, neighbor);
+      if (blockedTransitions.has(tKey)) continue;
+
+      // Validate *walkability* as we expand. If not viable, learn it.
+      const exec = canExecuteSegment(grid, solidTypes, { from: current, to: neighbor, action });
+      if (!exec.ok) {
+        blockedTransitions.add(tKey);
+        continue;
+      }
+
+      const nKey = nodeKey(neighbor);
+      if (state.visited.has(nKey)) continue;
+      state.visited.add(nKey);
+      state.parent.set(nKey, { node: current, action });
+      state.queue.push(neighbor);
+    }
+  }
+
+  return { status: "searching" };
 }
 
 /**

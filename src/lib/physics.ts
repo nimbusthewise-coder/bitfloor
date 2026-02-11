@@ -10,20 +10,31 @@ export type GravityDirection = "DOWN" | "UP" | "LEFT" | "RIGHT";
 export const PHYSICS = {
   // Gravity & jumping
   GRAVITY: 0.35,          // Acceleration per frame
-  JUMP_FORCE: 6.67,          // Initial jump velocity (~2 tile height)
+  JUMP_FORCE: 6.60,          // Initial jump velocity (~2 tile height)
   MAX_FALL_SPEED: 6,      // Terminal velocity
-  
+
   // Ground movement (smooth acceleration model)
   GROUND_MAX_SPEED: 5,    // Max run speed on ground
   GROUND_ACCEL: 0.8,      // Acceleration toward target speed
   GROUND_DECEL: 0.6,      // Deceleration when no input (friction)
-  
+
   // Air movement
   AIR_MAX_SPEED: 4,       // Max horizontal speed in air
   AIR_ACCEL: 0.5,        // Air control acceleration (reduced)
   AIR_DECEL: 0.02,        // Very low air friction (space station!)
-  
+
   TILE_SIZE: 32,
+};
+
+// Character collider configuration (tunable)
+// Visual sprite is 44px tall, but physics collider is smaller and positioned at feet
+export const PLAYER = {
+  COLLIDER_SIZE: 30,           // 24-30px range for tuning (default: 30)
+  SPRITE_HEIGHT: 44,           // Visual sprite height (unchanged)
+  SPRITE_WIDTH: 32,            // Visual sprite width (unchanged)
+  get COLLIDER_OFFSET_Y() {    // Offset from top of sprite to top of collider
+    return this.SPRITE_HEIGHT - this.COLLIDER_SIZE; // 14px for 30px collider
+  },
 };
 
 // Character physics state

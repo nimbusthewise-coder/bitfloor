@@ -6,6 +6,8 @@
 import { NextResponse } from "next/server";
 import { 
   findPath, 
+  findExecutablePath,
+  precomputeMovements,
   describePath, 
   getNavigationStats,
   getAllValidStates,
@@ -14,6 +16,7 @@ import {
 import { generateShipGrid, SOLID_TILES, SHIP_W, SHIP_H } from "@/lib/ship-grid";
 
 const shipGrid = generateShipGrid();
+const movementMap = precomputeMovements(shipGrid, SOLID_TILES);
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -38,26 +41,29 @@ export async function GET(request: Request) {
     const goalY = parseInt(searchParams.get("goalY") || "9");
     const goalGravity = searchParams.get("goalGravity") as GravityDir | undefined;
     
-    const path = findPath(
+    const executable = findExecutablePath(
       shipGrid,
       SOLID_TILES,
       { x: startX, y: startY, gravity: startGravity },
-      { x: goalX, y: goalY, gravity: goalGravity || undefined }
+      { x: goalX, y: goalY, gravity: goalGravity || undefined },
+      movementMap
     );
-    
-    if (path) {
+
+    if (executable) {
+      const { path, segments } = executable;
       return NextResponse.json({
         found: true,
         steps: path.length,
         path,
+        segments,
         description: describePath(path)
       });
-    } else {
-      return NextResponse.json({
-        found: false,
-        message: "No path found between these positions"
-      });
     }
+
+    return NextResponse.json({
+      found: false,
+      message: "No executable path found between these positions"
+    });
   }
   
   if (action === "states") {
