@@ -7,8 +7,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Press E to toggle editor mode
 
 const TILE = 32;
-const DEFAULT_SHIP_W = 48;  // Wider ship canvas
-const DEFAULT_SHIP_H = 32;  // Taller ship canvas
+const DEFAULT_SHIP_W = 96;  // Doubled for larger ship
+const DEFAULT_SHIP_H = 64;  // Doubled for larger ship
 
 // Tile types and colors (Moebius palette)
 const TILES = {
@@ -31,14 +31,190 @@ function createEmptyGrid(w: number, h: number): TileType[][] {
   return Array(h).fill(null).map(() => Array(w).fill("space" as TileType));
 }
 
+// Generate EPCOT/Flower-inspired ship layout
+function generateStellkinLayout(w: number, h: number): TileType[][] {
+  const grid = createEmptyGrid(w, h);
+  
+  const centerX = Math.floor(w / 2);
+  const centerY = Math.floor(h / 2);
+  
+  // Helper to set tile safely
+  const setTile = (x: number, y: number, tile: TileType) => {
+    if (x >= 0 && x < w && y >= 0 && y < h) {
+      grid[y][x] = tile;
+    }
+  };
+  
+  // Helper to fill rectangle
+  const fillRect = (x1: number, y1: number, x2: number, y2: number, tile: TileType) => {
+    for (let y = y1; y <= y2; y++) {
+      for (let x = x1; x <= x2; x++) {
+        setTile(x, y, tile);
+      }
+    }
+  };
+  
+  // Helper to draw hull outline
+  const hullRect = (x1: number, y1: number, x2: number, y2: number) => {
+    for (let x = x1; x <= x2; x++) {
+      setTile(x, y1, "hull");
+      setTile(x, y2, "hull");
+    }
+    for (let y = y1; y <= y2; y++) {
+      setTile(x1, y, "hull");
+      setTile(x2, y, "hull");
+    }
+  };
+  
+  // === CENTRAL HUB (Bridge) ===
+  // 12x12 central room
+  const hubSize = 6;
+  fillRect(centerX - hubSize, centerY - hubSize, centerX + hubSize, centerY + hubSize, "interior");
+  hullRect(centerX - hubSize, centerY - hubSize, centerX + hubSize, centerY + hubSize);
+  // Floor at bottom
+  fillRect(centerX - hubSize + 1, centerY + hubSize - 1, centerX + hubSize - 1, centerY + hubSize - 1, "floor");
+  // Consoles
+  setTile(centerX - 3, centerY + hubSize - 2, "console");
+  setTile(centerX + 3, centerY + hubSize - 2, "console");
+  setTile(centerX, centerY + hubSize - 2, "console");
+  // Windows at top
+  for (let x = centerX - 4; x <= centerX + 4; x += 2) {
+    setTile(x, centerY - hubSize, "window");
+  }
+  
+  // === RADIAL CORRIDORS (4 directions) ===
+  const corridorLength = 18;
+  const corridorWidth = 3;
+  
+  // North corridor (to Observatory)
+  fillRect(centerX - corridorWidth/2 |0, centerY - hubSize - corridorLength, centerX + corridorWidth/2 |0, centerY - hubSize, "interior");
+  hullRect(centerX - corridorWidth/2 |0 - 1, centerY - hubSize - corridorLength, centerX + corridorWidth/2 |0 + 1, centerY - hubSize);
+  // Floor/ceiling for gravity play
+  fillRect(centerX - corridorWidth/2 |0, centerY - hubSize - corridorLength, centerX + corridorWidth/2 |0, centerY - hubSize - corridorLength, "floor");
+  
+  // South corridor (to Landing Bay)  
+  fillRect(centerX - corridorWidth/2 |0, centerY + hubSize, centerX + corridorWidth/2 |0, centerY + hubSize + corridorLength, "interior");
+  hullRect(centerX - corridorWidth/2 |0 - 1, centerY + hubSize, centerX + corridorWidth/2 |0 + 1, centerY + hubSize + corridorLength);
+  fillRect(centerX - corridorWidth/2 |0, centerY + hubSize + corridorLength, centerX + corridorWidth/2 |0, centerY + hubSize + corridorLength, "floor");
+  
+  // East corridor (to Games/Crew)
+  fillRect(centerX + hubSize, centerY - corridorWidth/2 |0, centerX + hubSize + corridorLength, centerY + corridorWidth/2 |0, "interior");
+  hullRect(centerX + hubSize, centerY - corridorWidth/2 |0 - 1, centerX + hubSize + corridorLength, centerY + corridorWidth/2 |0 + 1);
+  // Floors on sides for LEFT/RIGHT gravity
+  for (let x = centerX + hubSize; x <= centerX + hubSize + corridorLength; x++) {
+    setTile(x, centerY + corridorWidth/2 |0 + 1, "floor");
+  }
+  
+  // West corridor (to Engineering)
+  fillRect(centerX - hubSize - corridorLength, centerY - corridorWidth/2 |0, centerX - hubSize, centerY + corridorWidth/2 |0, "interior");
+  hullRect(centerX - hubSize - corridorLength, centerY - corridorWidth/2 |0 - 1, centerX - hubSize, centerY + corridorWidth/2 |0 + 1);
+  for (let x = centerX - hubSize - corridorLength; x <= centerX - hubSize; x++) {
+    setTile(x, centerY + corridorWidth/2 |0 + 1, "floor");
+  }
+  
+  // === PETAL ROOMS ===
+  
+  // NORTH PETAL: Observatory/Lounge (best view of stars)
+  const petalW = 14;
+  const petalH = 10;
+  const northY = centerY - hubSize - corridorLength - petalH;
+  fillRect(centerX - petalW/2, northY, centerX + petalW/2, northY + petalH, "interior");
+  hullRect(centerX - petalW/2, northY, centerX + petalW/2, northY + petalH);
+  // Big windows
+  for (let x = centerX - petalW/2 + 2; x <= centerX + petalW/2 - 2; x++) {
+    setTile(x, northY, "window");
+  }
+  // Floor
+  fillRect(centerX - petalW/2 + 1, northY + petalH - 1, centerX + petalW/2 - 1, northY + petalH - 1, "floor");
+  // Comfortable seating (tables)
+  setTile(centerX - 3, northY + petalH - 2, "table");
+  setTile(centerX + 3, northY + petalH - 2, "table");
+  
+  // SOUTH PETAL: Landing Bay (large, open)
+  const southY = centerY + hubSize + corridorLength;
+  const bayW = 20;
+  const bayH = 12;
+  fillRect(centerX - bayW/2, southY, centerX + bayW/2, southY + bayH, "interior");
+  hullRect(centerX - bayW/2, southY, centerX + bayW/2, southY + bayH);
+  // Large door at bottom
+  for (let x = centerX - 4; x <= centerX + 4; x++) {
+    setTile(x, southY + bayH, "door");
+  }
+  // Floor
+  fillRect(centerX - bayW/2 + 1, southY + bayH - 1, centerX + bayW/2 - 1, southY + bayH - 1, "floor");
+  // Platform for ships (elevated)
+  fillRect(centerX - 6, southY + bayH - 4, centerX + 6, southY + bayH - 4, "floor");
+  
+  // EAST PETAL: Crew Quarters (3 bunks)
+  const eastX = centerX + hubSize + corridorLength;
+  const crewW = 16;
+  const crewH = 14;
+  fillRect(eastX, centerY - crewH/2, eastX + crewW, centerY + crewH/2, "interior");
+  hullRect(eastX, centerY - crewH/2, eastX + crewW, centerY + crewH/2);
+  // Floor
+  fillRect(eastX + 1, centerY + crewH/2 - 1, eastX + crewW - 1, centerY + crewH/2 - 1, "floor");
+  // Three bunks (JP violet, Nimbus cyan, CODEX orange - represented by beds)
+  setTile(eastX + 3, centerY + crewH/2 - 2, "bed");
+  setTile(eastX + 8, centerY + crewH/2 - 2, "bed");
+  setTile(eastX + 13, centerY + crewH/2 - 2, "bed");
+  // Windows
+  setTile(eastX + crewW, centerY - 2, "window");
+  setTile(eastX + crewW, centerY + 2, "window");
+  
+  // WEST PETAL: Engineering + Teleporter
+  const westX = centerX - hubSize - corridorLength - crewW;
+  fillRect(westX, centerY - crewH/2, westX + crewW, centerY + crewH/2, "interior");
+  hullRect(westX, centerY - crewH/2, westX + crewW, centerY + crewH/2);
+  // Floor
+  fillRect(westX + 1, centerY + crewH/2 - 1, westX + crewW - 1, centerY + crewH/2 - 1, "floor");
+  // Consoles (engineering)
+  setTile(westX + 2, centerY + crewH/2 - 2, "console");
+  setTile(westX + 4, centerY + crewH/2 - 2, "console");
+  setTile(westX + 6, centerY + crewH/2 - 2, "console");
+  // Teleporter pad (door tiles as pad)
+  fillRect(westX + 10, centerY + crewH/2 - 3, westX + 14, centerY + crewH/2 - 3, "door");
+  fillRect(westX + 10, centerY + crewH/2 - 2, westX + 14, centerY + crewH/2 - 2, "door");
+  
+  // === DIAGONAL PETALS (Games area - NE, NW corners) ===
+  
+  // NE: Games Room
+  const diagOffset = 16;
+  const gamesX = centerX + diagOffset;
+  const gamesY = centerY - diagOffset;
+  const gamesSize = 10;
+  fillRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize, "interior");
+  hullRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize);
+  fillRect(gamesX + 1, gamesY + gamesSize - 1, gamesX + gamesSize - 1, gamesY + gamesSize - 1, "floor");
+  // Arcade tables
+  setTile(gamesX + 3, gamesY + gamesSize - 2, "table");
+  setTile(gamesX + 7, gamesY + gamesSize - 2, "table");
+  // Connect to east corridor with small hallway
+  fillRect(centerX + hubSize + 3, centerY - corridorWidth/2 - 6, centerX + hubSize + 6, centerY - corridorWidth/2 - 1, "interior");
+  fillRect(gamesX, gamesY + gamesSize - 2, gamesX - 3, gamesY + gamesSize - 2, "floor");
+  
+  // === JUMP PLATFORMS (scattered for vertical navigation) ===
+  // Add small platforms in corridors for jumping practice
+  
+  // North corridor platforms
+  setTile(centerX - 2, centerY - hubSize - 6, "floor");
+  setTile(centerX + 2, centerY - hubSize - 10, "floor");
+  setTile(centerX, centerY - hubSize - 14, "floor");
+  
+  // South corridor platforms  
+  setTile(centerX - 2, centerY + hubSize + 6, "floor");
+  setTile(centerX + 2, centerY + hubSize + 10, "floor");
+  
+  return grid;
+}
+
 export default function StellkinPage() {
-  // Grid state
-  const [grid, setGrid] = useState<TileType[][]>(() => createEmptyGrid(DEFAULT_SHIP_W, DEFAULT_SHIP_H));
+  // Grid state (start with generated Stellkin layout)
+  const [grid, setGrid] = useState<TileType[][]>(() => generateStellkinLayout(DEFAULT_SHIP_W, DEFAULT_SHIP_H));
   const [shipW] = useState(DEFAULT_SHIP_W);
   const [shipH] = useState(DEFAULT_SHIP_H);
   
   // View state (pan & zoom)
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.5);  // Start zoomed out to see whole ship
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
   const [isPanning, setIsPanning] = useState(false);
@@ -390,6 +566,38 @@ export default function StellkinPage() {
           ))}
           
           <div style={{ borderTop: "1px solid #333", marginTop: 8, paddingTop: 8 }}>
+            <button
+              onClick={() => setGrid(generateStellkinLayout(shipW, shipH))}
+              style={{
+                width: "100%",
+                padding: "8px",
+                background: "#ff6600",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 8,
+                fontFamily: "inherit",
+                marginBottom: 4,
+              }}
+            >
+              🌸 GENERATE
+            </button>
+            <button
+              onClick={() => setGrid(createEmptyGrid(shipW, shipH))}
+              style={{
+                width: "100%",
+                padding: "8px",
+                background: "#660000",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 8,
+                fontFamily: "inherit",
+                marginBottom: 4,
+              }}
+            >
+              🗑️ CLEAR
+            </button>
             <button
               onClick={saveShip}
               style={{
