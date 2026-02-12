@@ -52,10 +52,11 @@ import {
 } from "@/lib/pathfinding-tests";
 
 // Character identities
-const nimbus: Identity = {
-  id: "nimbus",
-  name: "Nimbus",
-  faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
+// JP - Player character (green suit, round glasses)
+const jp: Identity = {
+  id: "jp",
+  name: "JP",
+  faceDNA: [0, 6, 0, 2, 8, 3, 8, 5],  // Round glasses!
   tints: {
     Suit: "#4ade80",
     Gloves: "#22c55e",
@@ -88,21 +89,21 @@ const codex: Identity = {
   speed: 1.2,
 };
 
-// Nim - Target character (pink/magenta)
-const nim: Identity = {
-  id: "nim",
-  name: "Nim",
-  faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
+// Nimbus - AI companion (cyan/teal - part of the digital world)
+const nimbus: Identity = {
+  id: "nimbus",
+  name: "Nimbus",
+  faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],  // My chosen face!
   tints: {
-    Suit: "#ff00aa",
-    Gloves: "#ff1493",
-    Boots: "#c71585",
-    Helmet: "#ff69b4",
+    Suit: "#00d4d4",     // Cyan/teal
+    Gloves: "#00b8b8",
+    Boots: "#008080",
+    Helmet: "#40e0e0",
   },
   faceTints: {
-    skin: "#ffe4e1",
-    hair: "#ff1493",
-    background: "#ffb6c1",
+    skin: "#ffd5b5",
+    hair: "#2d4a5e",     // Dark blue-gray hair
+    background: "#d4f4f4",
   },
   speed: 1,
 };
@@ -459,7 +460,7 @@ export default function ShipPage() {
   const fpsRef = useRef({ frames: 0, lastTime: performance.now() });
   
   // Nim baked sprites
-  const [nimBaked, setNimBaked] = useState<BakedSprite | null>(null);
+  const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
   
   // Debug: tile position visualization
   const [debugTiles, setDebugTiles] = useState<{
@@ -485,7 +486,7 @@ export default function ShipPage() {
   const visualTestIndexRef = useRef(0);
   
   // Sprite loading
-  const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
+  const [jpBaked, setJpBaked] = useState<BakedSprite | null>(null);
   const [codexBaked, setCodexBaked] = useState<BakedSprite | null>(null);
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
   const charCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -502,9 +503,9 @@ export default function ShipPage() {
         loadFaceSheet("/bitfloor/sprites/face-32.png"),
       ]);
       setSheet(spriteSheet);
-      setNimbusBaked(bakeIdentitySprites(spriteSheet, nimbus, faceSheet));
+      setJpBaked(bakeIdentitySprites(spriteSheet, jp, faceSheet));
       setCodexBaked(bakeIdentitySprites(spriteSheet, codex, faceSheet));
-      setNimBaked(bakeIdentitySprites(spriteSheet, nim, faceSheet));
+      setNimbusBaked(bakeIdentitySprites(spriteSheet, nimbus, faceSheet));
     }
     load();
   }, []);
@@ -2079,17 +2080,17 @@ export default function ShipPage() {
       ctx.restore();
     };
     
-    // Draw JP (Nimbus)
+    // Draw JP (Player - green)
     drawCharacter(
       charPhysicsRef.current, 
-      nimbusBaked, 
+      jpBaked, 
       charFrameRef.current,
       charDirRef.current,
       displayRotationRef.current,
       "#4ade80"
     );
     
-    // Draw Codex
+    // Draw Codex (AI - orange)
     drawCharacter(
       codexPhysicsRef.current,
       codexBaked,
@@ -2099,36 +2100,36 @@ export default function ShipPage() {
       "#fb923c"
     );
     
-    // Draw Nim
+    // Draw Nimbus (AI - cyan/teal)
     drawCharacter(
       nimPhysicsRef.current,
-      nimBaked,
+      nimbusBaked,
       nimFrameRef.current,
       nimDirRef.current,
       nimDisplayRotationRef.current,
-      "#ff00aa"
+      "#00d4d4"
     );
     
-    // Draw Nim destination marker
+    // Draw Nimbus destination marker
     if (nimDestinationRef.current) {
       const destX = (nimDestinationRef.current.x - startTileX) * TILE;
       const destY = (nimDestinationRef.current.y - startTileY) * TILE;
-      ctx.strokeStyle = "#ff00aa";
+      ctx.strokeStyle = "#00d4d4";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(destX, destY, TILE, TILE);
       ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(255, 0, 170, 0.15)";
+      ctx.fillStyle = "rgba(0, 212, 212, 0.15)";
       ctx.fillRect(destX, destY, TILE, TILE);
       // Label
-      ctx.fillStyle = "#ff00aa";
+      ctx.fillStyle = "#00d4d4";
       ctx.font = "8px 'Press Start 2P', monospace";
       ctx.fillText("DEST", destX, destY - 4);
     }
     
-    // Draw Nim planned path
+    // Draw Nimbus planned path
     if (nimCurrentPathRef.current.length > 0) {
-      ctx.strokeStyle = "#ff00aa";
+      ctx.strokeStyle = "#00d4d4";
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
       ctx.globalAlpha = 0.6;
@@ -2149,22 +2150,22 @@ export default function ShipPage() {
     }
     
     ctx.restore();
-  }, [nimbusBaked, codexBaked, nimBaked, visibleRooms, shipGrid]);
+  }, [jpBaked, codexBaked, nimbusBaked, visibleRooms, shipGrid]);
   
   // Keep ref in sync so rAF loop always calls the latest version
   renderGameCanvasRef.current = renderGameCanvas;
   
   // Debug: log when sprites are loaded
   useEffect(() => {
-    if (nimbusBaked && codexBaked && nimBaked) {
+    if (jpBaked && codexBaked && nimbusBaked) {
       // Sprites loaded - debug log disabled for performance
       // console.log("[Canvas] All sprites loaded!", {
-      //   nimbus: nimbusBaked.canvas.width,
+      //   jp: jpBaked.canvas.width,
       //   codex: codexBaked.canvas.width,
-      //   nim: nimBaked.canvas.width,
+      //   nimbus: nimbusBaked.canvas.width,
       // });
     }
-  }, [nimbusBaked, codexBaked, nimBaked]);
+  }, [jpBaked, codexBaked, nimbusBaked]);
 
   // Canvas render refs - read by renderGameCanvas() and rAF loop each frame
   // These are the ONLY source of truth for visual state (no React state)
@@ -2420,7 +2421,7 @@ export default function ShipPage() {
         </button>
         <button
           onClick={() => {
-            console.log("=== LIVE TEST: Pink Nim → (9,9) ===");
+            console.log("=== LIVE TEST: Nimbus → (9,9) ===");
             
             // 1. Reset Nim to spawn position
             const spawnX = 12 * TILE;
@@ -3065,7 +3066,7 @@ export default function ShipPage() {
               });
               setCodexPath([]);
               
-              // Reset NIM (Pink Nim on ceiling)
+              // Reset NIM (Nimbus on ceiling)
               setNimPhysics({
                 x: 12 * TILE,
                 y: 2 * TILE - PLAYER.COLLIDER_SIZE,
