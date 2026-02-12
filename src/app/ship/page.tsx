@@ -455,6 +455,10 @@ export default function ShipPage() {
   const nimExecutorRef = useRef<ExecutorState | null>(null);
   const nimUseExecutorRef = useRef<boolean>(true);  // Toggle between old/new system
   
+  // Codex frame executor (same architecture as Nimbus)
+  const codexExecutorRef = useRef<ExecutorState | null>(null);
+  const codexDestinationRef = useRef<{x: number, y: number} | null>(null);
+  
   // FPS counter for debugging performance
   const [fps, setFps] = useState(0);
   const fpsRef = useRef({ frames: 0, lastTime: performance.now() });
@@ -674,10 +678,55 @@ export default function ShipPage() {
           });
         }
         
-        // --- Codex Physics (AI-driven) ---
-        const newCodexState = updatePhysics(localCodexPhysics, codexInputRef.current, shipGrid, SOLID_TILES);
-        localCodexPhysics = newCodexState;
-        codexPhysicsRef.current = newCodexState;
+        // --- Codex Physics (AI-driven with frame executor) ---
+        if (codexExecutorRef.current && !isComplete(codexExecutorRef.current)) {
+          const frame = stepExecutor(codexExecutorRef.current);
+          if (frame) {
+            localCodexPhysics = {
+              ...localCodexPhysics,
+              x: frame.x,
+              y: frame.y,
+              vx: frame.vx,
+              vy: frame.vy,
+              gravity: frame.gravity,
+              grounded: frame.grounded,
+            };
+            codexPhysicsRef.current = localCodexPhysics;
+            
+            // Early-stop check: if we've reached destination, stop executor
+            const dest = codexDestinationRef.current;
+            if (dest) {
+              const centerX = frame.x + PLAYER.COLLIDER_SIZE / 2;
+              const centerY = frame.y + PLAYER.COLLIDER_SIZE / 2;
+              const destCenterX = dest.x * TILE + TILE / 2;
+              const destCenterY = dest.y * TILE + TILE / 2;
+              const dist = Math.sqrt(Math.pow(destCenterX - centerX, 2) + Math.pow(destCenterY - centerY, 2));
+              
+              if (dist < 4) {
+                // Arrived! Stop executor, zero velocity, snap to destination
+                const path = codexCurrentPathRef.current;
+                const finalAction = path.length > 0 ? path[path.length - 1] : null;
+                const landingGravity = finalAction?.landing?.gravity as GravityDirection | undefined;
+                
+                codexExecutorRef.current = null;
+                codexPhysicsRef.current.vx = 0;
+                codexPhysicsRef.current.vy = 0;
+                codexPhysicsRef.current.x = destCenterX - PLAYER.COLLIDER_SIZE / 2;
+                codexPhysicsRef.current.y = destCenterY - PLAYER.COLLIDER_SIZE / 2;
+                if (landingGravity) {
+                  codexPhysicsRef.current.gravity = landingGravity;
+                  codexPhysicsRef.current.grounded = true;
+                }
+                codexDestinationRef.current = null;
+              }
+            }
+          }
+        } else {
+          // Fall back to physics-based input movement (when no executor active)
+          const newCodexState = updatePhysics(localCodexPhysics, codexInputRef.current, shipGrid, SOLID_TILES);
+          localCodexPhysics = newCodexState;
+          codexPhysicsRef.current = newCodexState;
+        }
         
         // --- Nim Physics (AI-driven when has destination, or VISUAL TEST) ---
         // Visual test mode overrides normal AI input
@@ -942,6 +991,12 @@ export default function ShipPage() {
     if (bestCell && bestCell.path.length > 0) {
       codexCurrentPathRef.current = bestCell.path;
       codexPathProgressRef.current = 0;
+      
+      // Create frame executor for new path (same architecture as Nimbus)
+      codexExecutorRef.current = createExecutor(bestCell.path);
+      codexDestinationRef.current = bestCell.path[bestCell.path.length - 1].landing 
+        ? { x: bestCell.path[bestCell.path.length - 1].landing!.x, y: bestCell.path[bestCell.path.length - 1].landing!.y }
+        : null;
       
       // Build visualization
       const vizPath = bestCell.path.flatMap((jump: any): PathStep[] => {
