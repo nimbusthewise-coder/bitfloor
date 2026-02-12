@@ -1326,6 +1326,11 @@ export default function ShipPage() {
                   Math.pow(finalTargetY - nimCenterY, 2)
                 );
                 
+                // DEBUG: Always log walk state
+                if (nimDebug) {
+                  console.log(`[NimDBG] WALK CHECK: idx=${nimJumpIndex}, mergedEnd=${walkEndIndex}, dist=${distToTarget.toFixed(1)}, threshold=${(TILE * 0.4).toFixed(1)}, nimPos=(${nimCenterX.toFixed(0)},${nimCenterY.toFixed(0)}), target=(${finalTargetX.toFixed(0)},${finalTargetY.toFixed(0)})`);
+                }
+                
                 if (distToTarget < TILE * 0.4) {
                   // DEBUG: Log completion trigger
                   if (nimDebug) {
