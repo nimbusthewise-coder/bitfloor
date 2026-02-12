@@ -44,7 +44,7 @@ export interface ReachableCell {
 
 const TILE = 32;
 const CELL_COST = 4;  // Cost per cell traversed (walk or jump arc)
-const JUMP_PENALTY = 8;  // Extra cost for jumping - prefer walking when possible
+const JUMP_PENALTY = 20;  // Extra cost for jumping - strongly prefer walking when possible
 
 // Calculate jump cost based on unique cells traversed in the arc
 function calculateJumpCellCost(trajectory: Array<{ x: number; y: number }>): number {
@@ -54,8 +54,8 @@ function calculateJumpCellCost(trajectory: Array<{ x: number; y: number }>): num
     const cellY = Math.floor(point.y / TILE);
     visited.add(`${cellX},${cellY}`);
   }
-  // Minimum cost of 1 cell even for very short jumps
-  return Math.max(1, visited.size) * CELL_COST;
+  // Minimum cost of 3 cells even for very short jumps (ensures walks are cheaper for 1-2 cell moves)
+  return Math.max(3, visited.size) * CELL_COST;
 }
 
 // Convert grid cell to pixel position based on gravity
