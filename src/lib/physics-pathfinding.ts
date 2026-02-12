@@ -59,19 +59,27 @@ function calculateJumpCellCost(trajectory: Array<{ x: number; y: number }>): num
 }
 
 // Convert grid cell to pixel position based on gravity
-// The position is the character's center point
-// For DOWN gravity: standing on floor at y, so center is at y * TILE + TILE/2
-// For UP gravity: standing on ceiling at y, so center is at (y+1) * TILE - TILE/2
+// The position is the character's center point, adjusted for where they stand
+// For DOWN gravity: standing on floor, feet at bottom of cell
+// For UP gravity: standing on ceiling, feet at top of cell
+// For LEFT/RIGHT: standing on wall
 function cellToPixel(x: number, y: number, gravity: PhysGravity): { x: number; y: number } {
-  const centerX = x * TILE + TILE / 2;
-  const centerY = y * TILE + TILE / 2;
+  const halfTile = TILE / 2;
+  const halfCollider = COLLIDER / 2;
   
   switch (gravity) {
     case "DOWN":
+      // Standing on floor - center is offset up from cell bottom
+      return { x: x * TILE + halfTile, y: y * TILE + TILE - halfCollider };
     case "UP":
+      // Standing on ceiling - center is offset down from cell top  
+      return { x: x * TILE + halfTile, y: y * TILE + halfCollider };
     case "LEFT":
+      // Standing on left wall - center is offset right from cell left
+      return { x: x * TILE + halfCollider, y: y * TILE + halfTile };
     case "RIGHT":
-      return { x: centerX, y: centerY };
+      // Standing on right wall - center is offset left from cell right
+      return { x: x * TILE + TILE - halfCollider, y: y * TILE + halfTile };
   }
 }
 
