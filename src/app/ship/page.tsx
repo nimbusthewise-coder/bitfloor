@@ -1319,19 +1319,17 @@ export default function ShipPage() {
                 // (walking is perpendicular to gravity).
                 const distToFinal = Math.abs((finalTargetX - nimCenterX) * getMoveRightVector(nimGrav).x + (finalTargetY - nimCenterY) * getMoveRightVector(nimGrav).y);
                 
-                // Check if we've passed the target (overshoot detection)
-                // IMPORTANT: walk-left/walk-right are GRAVITY-relative.
-                // So we must measure overshoot along the gravity-relative lateral axis (moveRightVec),
-                // not raw screen X.
-                const moveRight = getMoveRightVector(nimGrav);
-                const lateralDelta = (finalTargetX - nimCenterX) * moveRight.x + (finalTargetY - nimCenterY) * moveRight.y;
-                const isOvershot = (walkDir === "walk-right" && lateralDelta < -TILE * 0.3) ||
-                                   (walkDir === "walk-left" && lateralDelta > TILE * 0.3);
+                // Simple distance check - are we close enough to the merged walk target?
+                // Use Euclidean distance, not directional delta (avoids gravity sign issues)
+                const distToTarget = Math.sqrt(
+                  Math.pow(finalTargetX - nimCenterX, 2) + 
+                  Math.pow(finalTargetY - nimCenterY, 2)
+                );
                 
-                if (Math.abs(lateralDelta) < TILE * 0.25 || isOvershot) {
+                if (distToTarget < TILE * 0.4) {
                   // DEBUG: Log completion trigger
                   if (nimDebug) {
-                    console.log(`[NimDBG] WALK COMPLETE: lateralDelta=${lateralDelta.toFixed(1)}, isOvershot=${isOvershot}, merged=${nimJumpIndex}→${walkEndIndex}, advancing to ${walkEndIndex + 1}`);
+                    console.log(`[NimDBG] WALK COMPLETE: dist=${distToTarget.toFixed(1)}, merged=${nimJumpIndex}→${walkEndIndex}, advancing to ${walkEndIndex + 1}`);
                   }
                   // Reached or passed the end of the merged walk — skip all walked steps
                   // Zero velocity to prevent coasting/overshoot ping-pong
