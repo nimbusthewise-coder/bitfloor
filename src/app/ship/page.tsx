@@ -718,8 +718,8 @@ export default function ShipPage() {
               const destCenterY = dest.y * TILE + TILE / 2;
               const dist = Math.sqrt(Math.pow(destCenterX - centerX, 2) + Math.pow(destCenterY - centerY, 2));
               
-              if (dist < TILE * 0.7) {
-                // Arrived! Stop executor, zero velocity, snap to destination
+              if (dist < TILE * 0.35) {
+                // Arrived at cell center! Stop executor, zero velocity, snap to destination
                 nimExecutorRef.current = null;
                 nimPhysicsRef.current.vx = 0;
                 nimPhysicsRef.current.vy = 0;
@@ -1451,7 +1451,7 @@ export default function ShipPage() {
           const grav = nimPhys.gravity;
           // Use Euclidean distance, not Manhattan
           const distToDest = Math.sqrt(dx * dx + dy * dy);
-          const closeEnough = distToDest < TILE * 0.6;
+          const closeEnough = distToDest < TILE * 0.35;
           if (closeEnough) {
             // Already at destination - stop and clear
             setNimDestination(null);
