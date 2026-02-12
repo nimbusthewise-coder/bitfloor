@@ -512,6 +512,14 @@ export function calculateReachableCells(
         );
         
         if (fallResult?.landing) {
+          // Skip no-op falls where we land at the same position we started
+          // (can happen with UP gravity where floor is right below ceiling)
+          if (fallResult.landing.x === fallResult.start.x && 
+              fallResult.landing.y === fallResult.start.y &&
+              fallResult.landing.gravity === fallResult.start.gravity) {
+            continue;
+          }
+          
           const key = `${fallResult.landing.x},${fallResult.landing.y},${fallResult.landing.gravity}`;
           // Fall cost: 1 walk cell + trajectory cells
           const newCost = current.cost + CELL_COST + fallResult.cost;

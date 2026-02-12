@@ -1286,14 +1286,23 @@ export default function ShipPage() {
               nimPathProgressRef.current = nimJumpIndex + 1;
             } else if (nimPhys.grounded) {
               const isWalk = nimAction.action === "walk-left" || nimAction.action === "walk-right";
+              const isFall = nimAction.action === "fall-left" || nimAction.action === "fall-right";
               
-              if (isWalk) {
-                // MERGE consecutive walks: find the LAST walk in the same direction
+              if (isWalk || isFall) {
+                // MERGE consecutive walks/falls: find the LAST one in the same direction
                 let walkEndIndex = nimJumpIndex;
                 const walkDir = nimAction.action;
+                // Get the direction (left/right) from the action name
+                const currentDir = walkDir.endsWith("-left") ? "left" : "right";
+                
                 while (walkEndIndex + 1 < nimCurrentPathRef.current.length) {
                   const nextAction = nimCurrentPathRef.current[walkEndIndex + 1];
-                  if (nextAction.action === walkDir) {
+                  // Merge walks and falls in the same direction
+                  const nextIsWalkOrFall = nextAction.action === "walk-left" || nextAction.action === "walk-right" ||
+                                           nextAction.action === "fall-left" || nextAction.action === "fall-right";
+                  const nextDir = nextAction.action.endsWith("-left") ? "left" : "right";
+                  
+                  if (nextIsWalkOrFall && nextDir === currentDir) {
                     walkEndIndex++;
                   } else {
                     break;
@@ -1303,10 +1312,10 @@ export default function ShipPage() {
                 // DEBUG: Log merge results
                 if (nimDebug) {
                   if (walkEndIndex !== nimJumpIndex) {
-                    console.log(`[NimDBG] MERGED walks: ${nimJumpIndex} → ${walkEndIndex} (${walkEndIndex - nimJumpIndex + 1} cells)`);
+                    console.log(`[NimDBG] MERGED ${currentDir}: ${nimJumpIndex} → ${walkEndIndex} (${walkEndIndex - nimJumpIndex + 1} cells)`);
                   } else {
                     const pathActions = nimCurrentPathRef.current.map((a: any) => a.action).join(', ');
-                    console.log(`[NimDBG] NO MERGE at ${nimJumpIndex}, walkDir=${walkDir}, path=[${pathActions}]`);
+                    console.log(`[NimDBG] NO MERGE at ${nimJumpIndex}, dir=${currentDir}, path=[${pathActions}]`);
                   }
                 }
                 
@@ -1350,9 +1359,9 @@ export default function ShipPage() {
                   
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
-                  // Keep walking toward the final target.
-                  // Use analog lateral axis so execution matches the planner's gravity-relative notion of left/right.
-                  nimInput.lateral = walkDir === "walk-left" ? -1 : 1;
+                  // Keep walking/falling toward the final target.
+                  // Use direction from action name (works for both walk-* and fall-*)
+                  nimInput.lateral = currentDir === "left" ? -1 : 1;
 
                   // Stuck detection: if we're issuing walk but not moving, clear the plan so we can replan.
                   const stuck = nimWalkStuckRef.current;
@@ -1364,7 +1373,7 @@ export default function ShipPage() {
 
                   if (stuck.count >= 4) {
                     // If we're very close, snap to the intended end of this merged walk.
-                    if (Math.abs(lateralDelta) < TILE * 0.9) {
+                    if (distToTarget < TILE * 0.9) {
                       const w = nimPhys.width;
                       const h = nimPhys.height;
                       nimPhysicsRef.current.x = finalTargetX - w / 2;
