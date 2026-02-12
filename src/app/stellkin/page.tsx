@@ -66,21 +66,42 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
     }
   };
   
-  // === CENTRAL HUB (Bridge) ===
-  // 12x12 central room
-  const hubSize = 6;
+  // === CENTRAL HUB (Severance-style 4-way Command Center) ===
+  // Square room with floors on ALL 4 walls - multi-gravity workspace
+  const hubSize = 7;
   fillRect(centerX - hubSize, centerY - hubSize, centerX + hubSize, centerY + hubSize, "interior");
   hullRect(centerX - hubSize, centerY - hubSize, centerX + hubSize, centerY + hubSize);
-  // Floor at bottom
+  
+  // FLOORS ON ALL 4 SIDES (each becomes a gravity surface)
+  // Bottom floor (DOWN gravity)
   fillRect(centerX - hubSize + 1, centerY + hubSize - 1, centerX + hubSize - 1, centerY + hubSize - 1, "floor");
-  // Consoles
+  // Top floor (UP gravity - ceiling workers)
+  fillRect(centerX - hubSize + 1, centerY - hubSize + 1, centerX + hubSize - 1, centerY - hubSize + 1, "floor");
+  // Left floor (LEFT gravity - wall workers)
+  for (let y = centerY - hubSize + 2; y <= centerY + hubSize - 2; y++) {
+    setTile(centerX - hubSize + 1, y, "floor");
+  }
+  // Right floor (RIGHT gravity - wall workers)
+  for (let y = centerY - hubSize + 2; y <= centerY + hubSize - 2; y++) {
+    setTile(centerX + hubSize - 1, y, "floor");
+  }
+  
+  // CONSOLES facing inward from each gravity orientation
+  // Down-gravity consoles (facing up toward center)
   setTile(centerX - 3, centerY + hubSize - 2, "console");
   setTile(centerX + 3, centerY + hubSize - 2, "console");
-  setTile(centerX, centerY + hubSize - 2, "console");
-  // Windows at top
-  for (let x = centerX - 4; x <= centerX + 4; x += 2) {
-    setTile(x, centerY - hubSize, "window");
-  }
+  // Up-gravity consoles (facing down toward center)
+  setTile(centerX - 3, centerY - hubSize + 2, "console");
+  setTile(centerX + 3, centerY - hubSize + 2, "console");
+  // Left-gravity consoles (facing right toward center)
+  setTile(centerX - hubSize + 2, centerY - 2, "console");
+  setTile(centerX - hubSize + 2, centerY + 2, "console");
+  // Right-gravity consoles (facing left toward center)
+  setTile(centerX + hubSize - 2, centerY - 2, "console");
+  setTile(centerX + hubSize - 2, centerY + 2, "console");
+  
+  // Center marker (the convergence point)
+  setTile(centerX, centerY, "door");  // Could be a special "nexus" tile
   
   // === RADIAL CORRIDORS (4 directions) ===
   const corridorLength = 10;  // Fits in 64x64 grid
