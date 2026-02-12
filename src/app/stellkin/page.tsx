@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { drawRoom, LUMA_QUARTER, renderRoomCanvas } from "@/lib/stellkin-room";
 
 // === STELLKIN SHIP EDITOR ===
 // A clean, focused ship builder for the Stellkin
@@ -230,6 +231,109 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   return grid;
 }
 
+// === STELLKIN CREW ===
+// The four founding members of the Stellkin
+
+interface CrewMember {
+  id: string;
+  name: string;
+  color: string;       // Primary color
+  faceDNA: number[];   // Avatar DNA
+  role: string;
+  speed: number;
+}
+
+const CREW: CrewMember[] = [
+  {
+    id: "jp",
+    name: "JP",
+    color: "#a855f7",  // Violet
+    faceDNA: [0, 6, 0, 2, 8, 3, 8, 5],
+    role: "Creative Director",
+    speed: 1,
+  },
+  {
+    id: "nimbus",
+    name: "Nimbus", 
+    color: "#00d4d4",  // Cyan
+    faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
+    role: "Worldbuilder",
+    speed: 1,
+  },
+  {
+    id: "sol",
+    name: "Sol",
+    color: "#f59e0b",  // Gold
+    faceDNA: [0, 3, 3, 3, 8, 5, 3, 2],
+    role: "Craftsperson",
+    speed: 0.9,
+  },
+  {
+    id: "luma",
+    name: "Luma",
+    color: "#ec4899",  // Magenta
+    faceDNA: [0, 4, 5, 0, 7, 6, 5, 7],
+    role: "Designer",
+    speed: 1.1,
+  },
+];
+
+// Character physics state
+interface CharacterState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  grounded: boolean;
+  facing: "left" | "right";
+}
+
+// Initialize crew positions (spawn in different areas)
+function initCrewPositions(shipW: number, shipH: number): Map<string, CharacterState> {
+  const centerX = shipW / 2 * TILE;
+  const centerY = shipH / 2 * TILE;
+  
+  const positions = new Map<string, CharacterState>();
+  
+  // JP spawns at center (player)
+  positions.set("jp", {
+    x: centerX,
+    y: centerY + 5 * TILE,
+    vx: 0, vy: 0,
+    grounded: true,
+    facing: "right",
+  });
+  
+  // Nimbus spawns north (observatory area)
+  positions.set("nimbus", {
+    x: centerX,
+    y: centerY - 15 * TILE,
+    vx: 0, vy: 0,
+    grounded: true,
+    facing: "left",
+  });
+  
+  // Sol spawns west (engineering)
+  positions.set("sol", {
+    x: centerX - 20 * TILE,
+    y: centerY,
+    vx: 0, vy: 0,
+    grounded: true,
+    facing: "right",
+  });
+  
+  // Luma spawns east (crew quarters)
+  positions.set("luma", {
+    x: centerX + 20 * TILE,
+    y: centerY,
+    vx: 0, vy: 0,
+    grounded: true,
+    facing: "left",
+  });
+  
+  return positions;
+}
+
 export default function StellkinPage() {
   // Grid state (start with generated Stellkin layout)
   const [grid, setGrid] = useState<TileType[][]>(() => generateStellkinLayout(DEFAULT_SHIP_W, DEFAULT_SHIP_H));
@@ -245,6 +349,8 @@ export default function StellkinPage() {
   
   // Editor state
   const [editorMode, setEditorMode] = useState(true);  // Start in editor mode
+  const editorModeRef = useRef(editorMode);
+  useEffect(() => { editorModeRef.current = editorMode; }, [editorMode]);
   const [selectedTile, setSelectedTile] = useState<TileType>("floor");
   const [showGrid, setShowGrid] = useState(true);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -252,7 +358,19 @@ export default function StellkinPage() {
   
   // Canvas ref
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const roomCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // === CREW STATE ===
+  const [crewPositions, setCrewPositions] = useState<Map<string, CharacterState>>(
+    () => initCrewPositions(DEFAULT_SHIP_W, DEFAULT_SHIP_H)
+  );
+  
+  // Player input state
+  const keysRef = useRef({ up: false, down: false, left: false, right: false });
+  
+  // Track which character is player-controlled
+  const playerId = "jp";
   
   // Starfield animation
   const starsRef = useRef<Array<{x: number, y: number, z: number}>>([]);
@@ -260,6 +378,7 @@ export default function StellkinPage() {
   
   // Animation frame counter (forces re-render for starfield)
   const [frameCount, setFrameCount] = useState(0);
+  const roomCanvasCache = useRef<Record<string, HTMLCanvasElement>>({});
   
   // Initialize stars
   useEffect(() => {
@@ -277,6 +396,35 @@ export default function StellkinPage() {
     const animate = () => {
       if (!running) return;
       setFrameCount(f => f + 1);
+      
+      // Update player position when not in editor mode
+      if (!editorModeRef.current) {
+        const keys = keysRef.current;
+        const speed = 4; // pixels per frame
+        
+        setCrewPositions(prev => {
+          const next = new Map(prev);
+          const jp = next.get(playerId);
+          if (jp) {
+            let dx = 0, dy = 0;
+            if (keys.left) dx -= speed;
+            if (keys.right) dx += speed;
+            if (keys.up) dy -= speed;
+            if (keys.down) dy += speed;
+            
+            if (dx !== 0 || dy !== 0) {
+              next.set(playerId, {
+                ...jp,
+                x: jp.x + dx,
+                y: jp.y + dy,
+                facing: dx < 0 ? "left" : dx > 0 ? "right" : jp.facing,
+              });
+            }
+          }
+          return next;
+        });
+      }
+      
       animFrameRef.current = requestAnimationFrame(animate);
     };
     animate();
@@ -309,12 +457,25 @@ export default function StellkinPage() {
       if (e.key === "ArrowRight") setPanX(p => p - panSpeed);
       if (e.key === "ArrowUp") setPanY(p => p + panSpeed);
       if (e.key === "ArrowDown") setPanY(p => p - panSpeed);
+      
+      // WASD for player movement (play mode only)
+      const k = e.key.toLowerCase();
+      if (k === "w") keysRef.current.up = true;
+      if (k === "s") keysRef.current.down = true;
+      if (k === "a") keysRef.current.left = true;
+      if (k === "d") keysRef.current.right = true;
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") {
         setSpaceHeld(false);
       }
+      // WASD release
+      const k = e.key.toLowerCase();
+      if (k === "w") keysRef.current.up = false;
+      if (k === "s") keysRef.current.down = false;
+      if (k === "a") keysRef.current.left = false;
+      if (k === "d") keysRef.current.right = false;
     };
     
     window.addEventListener("keydown", handleKeyDown);
@@ -415,6 +576,26 @@ export default function StellkinPage() {
     setIsPanning(false);
   };
   
+  const getRoomZones = (w: number, h: number) => {
+    const centerX = Math.floor(w / 2);
+    const centerY = Math.floor(h / 2);
+    const hubSize = 7;
+    const corridorLength = 10;
+    const crewW = 14;
+    const crewH = 12;
+    const eastX = centerX + hubSize + corridorLength;
+    return [
+      {
+        id: "luma-quarter",
+        room: LUMA_QUARTER,
+        x: eastX,
+        y: Math.floor(centerY - crewH / 2),
+        w: crewW,
+        h: crewH,
+      },
+    ];
+  };
+
   // Render canvas
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -504,6 +685,17 @@ export default function StellkinPage() {
         }
       }
     }
+
+    // Room overlay pass (grid-snapped)
+    const roomZones = getRoomZones(shipW, shipH);
+    for (const zone of roomZones) {
+      const key = `${zone.id}-${TILE}`;
+      if (!roomCanvasCache.current[key]) {
+        roomCanvasCache.current[key] = renderRoomCanvas(zone.room, { tile: TILE, padding: 0 });
+      }
+      const roomCanvas = roomCanvasCache.current[key];
+      ctx.drawImage(roomCanvas, zone.x * TILE, zone.y * TILE, zone.w * TILE, zone.h * TILE);
+    }
     
     // Draw center lines (crosshairs)
     if (showGrid && editorMode) {
@@ -535,6 +727,49 @@ export default function StellkinPage() {
       ctx.strokeRect(0, 0, shipW * TILE, shipH * TILE);
     }
     
+    // === RENDER CREW ===
+    // Draw each crew member as a colored circle with their initial
+    for (const member of CREW) {
+      const state = crewPositions.get(member.id);
+      if (!state) continue;
+      
+      const size = 24;
+      const x = state.x;
+      const y = state.y;
+      
+      // Glow effect
+      ctx.shadowColor = member.color;
+      ctx.shadowBlur = 12;
+      
+      // Body circle
+      ctx.fillStyle = member.color;
+      ctx.beginPath();
+      ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Reset shadow
+      ctx.shadowBlur = 0;
+      
+      // Border
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      // Initial letter
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(member.name[0], x, y);
+      
+      // Name label below (in play mode)
+      if (!editorMode) {
+        ctx.font = "8px sans-serif";
+        ctx.fillStyle = member.color;
+        ctx.fillText(member.name, x, y + size / 2 + 10);
+      }
+    }
+    
     ctx.restore();
     
     // HUD - Ship name
@@ -554,8 +789,17 @@ export default function StellkinPage() {
     ctx.textAlign = "right";
     ctx.fillText(`${Math.round(zoom * 100)}%`, canvas.width - 20, 30);
     
-  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount]);
+  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions]);
   
+  // Room preview (Luma's quarter)
+  useEffect(() => {
+    const canvas = roomCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    drawRoom(ctx, LUMA_QUARTER, { tile: 18, padding: 10 });
+  }, []);
+
   // Resize handler
   useEffect(() => {
     const handleResize = () => {
@@ -627,6 +871,30 @@ export default function StellkinPage() {
           imageRendering: "pixelated",
         }}
       />
+
+      {/* Luma's Quarter Preview */}
+      <div
+        style={{
+          position: "absolute",
+          right: 20,
+          top: 60,
+          padding: 10,
+          background: "rgba(10, 10, 20, 0.9)",
+          border: "1px solid #444455",
+          boxShadow: "0 0 20px rgba(255, 0, 170, 0.25)",
+        }}
+      >
+        <div style={{ color: "#ff00aa", fontSize: 8, marginBottom: 6 }}>
+          LUMA'S QUARTERS
+        </div>
+        <canvas
+          ref={roomCanvasRef}
+          style={{
+            display: "block",
+            imageRendering: "pixelated",
+          }}
+        />
+      </div>
       
       {/* Tile Palette (Editor Mode) */}
       {editorMode && (
