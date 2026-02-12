@@ -695,6 +695,25 @@ export default function ShipPage() {
               grounded: frame.grounded,
             };
             nimPhysicsRef.current = localNimPhysics;
+            
+            // Early-stop check: if we've reached destination, stop executor
+            const dest = nimDestinationRef.current;
+            if (dest) {
+              const centerX = frame.x + PLAYER.COLLIDER_SIZE / 2;
+              const centerY = frame.y + PLAYER.COLLIDER_SIZE / 2;
+              const destCenterX = dest.x * TILE + TILE / 2;
+              const destCenterY = dest.y * TILE + TILE / 2;
+              const dist = Math.sqrt(Math.pow(destCenterX - centerX, 2) + Math.pow(destCenterY - centerY, 2));
+              
+              if (dist < TILE * 0.5) {
+                // Arrived! Stop executor and clear destination
+                nimExecutorRef.current = null;
+                nimPhysicsRef.current.vx = 0;
+                nimPhysicsRef.current.vy = 0;
+                nimDestinationRef.current = null;
+                // Note: setNimDestination will be called in AI tick
+              }
+            }
           }
         } else {
           // Fall back to physics-based input movement
@@ -1268,15 +1287,21 @@ export default function ShipPage() {
           
           if (DEBUG_NIM) console.log(`[NimDBG] 🎬 EXECUTOR COMPLETE: dist to dest = ${distToDest.toFixed(1)}`);
           
-          if (distToDest < TILE * 1.5) {
-            // Close enough - arrived!
+          // Zero velocity to prevent coasting past destination
+          nimPhysicsRef.current.vx = 0;
+          nimPhysicsRef.current.vy = 0;
+          
+          if (distToDest < TILE * 2) {
+            // Close enough - arrived! (increased threshold to 2 tiles)
             if (DEBUG_NIM) console.log("[NimDBG] ✅ ARRIVED at destination!");
             setNimDestination(null);
             nimDestinationRef.current = null;
             nimDestKeyRef.current = null;
+            nimExecutorRef.current = null;
+          } else {
+            // Not at destination - clear executor to trigger replan
+            nimExecutorRef.current = null;
           }
-          // Clear executor so we can replan if needed
-          nimExecutorRef.current = null;
         }
         
         // Debug: log Nim AI state when PATHS is ON (throttled)
