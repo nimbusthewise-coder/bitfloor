@@ -720,12 +720,23 @@ export default function ShipPage() {
               
               if (dist < 4) {
                 // Arrived at cell center (within 4px)! Stop executor, zero velocity, snap to destination
+                
+                // Get landing gravity from the path's final action
+                const path = nimCurrentPathRef.current;
+                const finalAction = path.length > 0 ? path[path.length - 1] : null;
+                const landingGravity = finalAction?.landing?.gravity as GravityDirection | undefined;
+                
                 nimExecutorRef.current = null;
                 nimPhysicsRef.current.vx = 0;
                 nimPhysicsRef.current.vy = 0;
-                // Snap to destination cell center (adjusted for gravity)
+                // Snap to destination cell center
                 nimPhysicsRef.current.x = destCenterX - PLAYER.COLLIDER_SIZE / 2;
                 nimPhysicsRef.current.y = destCenterY - PLAYER.COLLIDER_SIZE / 2;
+                // Apply landing gravity if available (for wall sticks)
+                if (landingGravity) {
+                  nimPhysicsRef.current.gravity = landingGravity;
+                  nimPhysicsRef.current.grounded = true;
+                }
                 nimDestinationRef.current = null;
                 // Note: setNimDestination will be called in AI tick
               }
@@ -1310,6 +1321,15 @@ export default function ShipPage() {
           if (distToDest < TILE * 2) {
             // Close enough - arrived! (increased threshold to 2 tiles)
             if (DEBUG_NIM) console.log("[NimDBG] ✅ ARRIVED at destination!");
+            
+            // Apply landing gravity from final path action (for wall sticks)
+            const path = nimCurrentPathRef.current;
+            const finalAction = path.length > 0 ? path[path.length - 1] : null;
+            if (finalAction?.landing?.gravity) {
+              nimPhysicsRef.current.gravity = finalAction.landing.gravity as GravityDirection;
+              nimPhysicsRef.current.grounded = true;
+            }
+            
             setNimDestination(null);
             nimDestinationRef.current = null;
             nimDestKeyRef.current = null;
