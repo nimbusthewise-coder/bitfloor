@@ -917,7 +917,7 @@ export default function ShipPage() {
         ];
       });
       setCodexPath(vizPath);
-      console.log("[AI] Plan:", bestCell.path.length, "jumps to Nim (", reachable.length, "reachable)");
+      // console.log("[AI] Plan:", bestCell.path.length, "jumps to Nim (", reachable.length, "reachable)");
     }
     
     // Also update trajectory visualization if enabled
@@ -1717,7 +1717,7 @@ export default function ShipPage() {
       if (visualTestQueueRef.current.length > 0) {
         return; // Visual test mode active - skip AI input
       }
-      if (dest && showPathsRef.current && (nimDebugTickRef.current % 5 === 0)) {
+      if (DEBUG_NIM && dest && showPathsRef.current && (nimDebugTickRef.current % 5 === 0)) {
         console.log("[NimDBG] input", nimInput);
       }
       nimInputRef.current = nimInput;
@@ -2104,14 +2104,15 @@ export default function ShipPage() {
   // Keep ref in sync so rAF loop always calls the latest version
   renderGameCanvasRef.current = renderGameCanvas;
   
-  // Debug: log when sprites are loaded (remove after debugging)
+  // Debug: log when sprites are loaded
   useEffect(() => {
     if (nimbusBaked && codexBaked && nimBaked) {
-      console.log("[Canvas] All sprites loaded!", {
-        nimbus: nimbusBaked.canvas.width,
-        codex: codexBaked.canvas.width,
-        nim: nimBaked.canvas.width,
-      });
+      // Sprites loaded - debug log disabled for performance
+      // console.log("[Canvas] All sprites loaded!", {
+      //   nimbus: nimbusBaked.canvas.width,
+      //   codex: codexBaked.canvas.width,
+      //   nim: nimBaked.canvas.width,
+      // });
     }
   }, [nimbusBaked, codexBaked, nimBaked]);
 
@@ -2655,9 +2656,9 @@ export default function ShipPage() {
                   { node: { x: jump.landing.x, y: jump.landing.y, gravity: jump.landing.gravity as GravityDir }, action: 'jump' }
                 ];
               }));
-              console.log(`[Nim AI] Path to (${tileX}, ${tileY}): ${bestCell.path.length} actions`);
+              if (DEBUG_NIM) console.log(`[Nim AI] Path to (${tileX}, ${tileY}): ${bestCell.path.length} actions`);
             } else {
-              console.log(`[Nim AI] No path to (${tileX}, ${tileY})`);
+              if (DEBUG_NIM) console.log(`[Nim AI] No path to (${tileX}, ${tileY})`);
             }
           }
         }}

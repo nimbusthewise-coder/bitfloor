@@ -260,7 +260,7 @@ export async function loadSpriteSheet(
     image.onerror = reject;
   });
   
-  console.log('[loadSpriteSheet] Loaded tags:', tags.map(t => `${t.name}(${t.from}-${t.to})`));
+  // console.log('[loadSpriteSheet] Loaded tags:', tags.map(t => `${t.name}(${t.from}-${t.to})`));
   
   return { image, frames, tags, layers, size };
 }
