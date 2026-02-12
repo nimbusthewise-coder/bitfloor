@@ -1160,7 +1160,7 @@ export default function ShipPage() {
         const needsRecalc = !hasActivePath && nimPhys.grounded;
         
         if (needsRecalc) {
-          if (nimDebug) console.log("[NimDBG] needsRecalc=true");
+          if (nimDebug) console.log(`[NimDBG] RECALC: pathLen=${nimCurrentPathRef.current.length}, progress=${nimPathProgressRef.current}, grounded=${nimPhys.grounded}`);
           const nimTileX = Math.round(nimPhys.x / TILE);
           const nimTileY = Math.round(nimPhys.y / TILE);
           
@@ -1382,6 +1382,7 @@ export default function ShipPage() {
                       nimPhysicsRef.current.vy = 0;
                       nimPathProgressRef.current = walkEndIndex + 1;
                     } else {
+                      if (nimDebug) console.log(`[NimDBG] STUCK CLEAR: distToTarget=${distToTarget.toFixed(1)}, clearing path`);
                       nimCurrentPathRef.current = [];
                       nimPathProgressRef.current = 0;
                     }
