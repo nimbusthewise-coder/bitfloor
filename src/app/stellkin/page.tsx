@@ -7,8 +7,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Press E to toggle editor mode
 
 const TILE = 32;
-const DEFAULT_SHIP_W = 96;  // Doubled for larger ship
-const DEFAULT_SHIP_H = 64;  // Doubled for larger ship
+const DEFAULT_SHIP_W = 64;  // Square grid
+const DEFAULT_SHIP_H = 64;  // Square grid
 
 // Tile types and colors (Moebius palette)
 const TILES = {
@@ -83,7 +83,7 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   }
   
   // === RADIAL CORRIDORS (4 directions) ===
-  const corridorLength = 12;  // Reduced to fit in grid
+  const corridorLength = 10;  // Fits in 64x64 grid
   const corridorWidth = 3;
   
   // North corridor (to Observatory)
@@ -216,7 +216,7 @@ export default function StellkinPage() {
   const [shipH] = useState(DEFAULT_SHIP_H);
   
   // View state (pan & zoom)
-  const [zoom, setZoom] = useState(0.5);  // Start zoomed out to see whole ship
+  const [zoom, setZoom] = useState(0.6);  // Start zoomed out to see whole ship
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
   const [isPanning, setIsPanning] = useState(false);
