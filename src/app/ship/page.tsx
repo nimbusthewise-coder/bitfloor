@@ -454,6 +454,10 @@ export default function ShipPage() {
   const nimExecutorRef = useRef<ExecutorState | null>(null);
   const nimUseExecutorRef = useRef<boolean>(true);  // Toggle between old/new system
   
+  // FPS counter for debugging performance
+  const [fps, setFps] = useState(0);
+  const fpsRef = useRef({ frames: 0, lastTime: performance.now() });
+  
   // Nim baked sprites
   const [nimBaked, setNimBaked] = useState<BakedSprite | null>(null);
   
@@ -587,6 +591,15 @@ export default function ShipPage() {
       const deltaTime = currentTime - lastTime;
       lastTime = currentTime;
       accumulator += deltaTime;
+      
+      // FPS tracking
+      fpsRef.current.frames++;
+      const fpsElapsed = currentTime - fpsRef.current.lastTime;
+      if (fpsElapsed >= 1000) {
+        setFps(Math.round(fpsRef.current.frames * 1000 / fpsElapsed));
+        fpsRef.current.frames = 0;
+        fpsRef.current.lastTime = currentTime;
+      }
       
       // Clamp accumulator to prevent spiral of death on slow frames
       if (accumulator > MAX_ACCUMULATOR) {
@@ -2198,6 +2211,15 @@ export default function ShipPage() {
         >
           PATH {showPaths ? "ON" : "OFF"}
         </button>
+        <span style={{
+          padding: "4px 8px",
+          background: fps < 30 ? "#f00" : fps < 55 ? "#ff0" : "#0f0",
+          color: "#000",
+          fontFamily: "monospace",
+          fontWeight: "bold",
+        }}>
+          {fps} FPS
+        </span>
         <button
           onClick={() => setShowPhysicsPaths(p => !p)}
           style={{
