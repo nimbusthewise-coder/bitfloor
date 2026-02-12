@@ -528,10 +528,12 @@ export default function StellkinPage() {
       ctx.setLineDash([]);
     }
     
-    // Draw ship boundary
-    ctx.strokeStyle = editorMode ? "#00ffff" : "#333";
-    ctx.lineWidth = 2 / zoom;
-    ctx.strokeRect(0, 0, shipW * TILE, shipH * TILE);
+    // Draw ship boundary (only in editor mode)
+    if (editorMode) {
+      ctx.strokeStyle = "#00ffff";
+      ctx.lineWidth = 2 / zoom;
+      ctx.strokeRect(0, 0, shipW * TILE, shipH * TILE);
+    }
     
     ctx.restore();
     
