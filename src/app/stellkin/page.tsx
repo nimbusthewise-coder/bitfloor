@@ -254,6 +254,39 @@ export default function StellkinPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Starfield animation
+  const starsRef = useRef<Array<{x: number, y: number, z: number}>>([]);
+  const animFrameRef = useRef<number>(0);
+  
+  // Animation frame counter (forces re-render for starfield)
+  const [frameCount, setFrameCount] = useState(0);
+  
+  // Initialize stars
+  useEffect(() => {
+    const numStars = 200;
+    starsRef.current = Array.from({ length: numStars }, () => ({
+      x: (Math.random() - 0.5) * 2000,
+      y: (Math.random() - 0.5) * 2000,
+      z: Math.random() * 1000 + 100,
+    }));
+  }, []);
+  
+  // Animation loop for starfield (continuous)
+  useEffect(() => {
+    let running = true;
+    const animate = () => {
+      if (!running) return;
+      setFrameCount(f => f + 1);
+      animFrameRef.current = requestAnimationFrame(animate);
+    };
+    animate();
+    
+    return () => {
+      running = false;
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
+  
   // Track spacebar for pan mode (Photoshop style)
   const [spaceHeld, setSpaceHeld] = useState(false);
   
@@ -399,6 +432,51 @@ export default function StellkinPage() {
     ctx.fillStyle = "#0a0a0f";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
+    // === STARFIELD (Windows 98 screensaver style) ===
+    const centerScreenX = canvas.width / 2;
+    const centerScreenY = canvas.height / 2;
+    const speed = 2;
+    
+    ctx.fillStyle = "#ffffff";
+    for (const star of starsRef.current) {
+      // Move star toward viewer
+      star.z -= speed;
+      
+      // Reset star if it passes the viewer
+      if (star.z <= 0) {
+        star.x = (Math.random() - 0.5) * 2000;
+        star.y = (Math.random() - 0.5) * 2000;
+        star.z = 1000;
+      }
+      
+      // Project 3D to 2D (perspective)
+      const projX = (star.x / star.z) * 300 + centerScreenX;
+      const projY = (star.y / star.z) * 300 + centerScreenY;
+      
+      // Size based on distance (closer = bigger)
+      const size = Math.max(0.5, (1 - star.z / 1000) * 3);
+      
+      // Brightness based on distance
+      const brightness = Math.floor((1 - star.z / 1000) * 255);
+      ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${Math.min(255, brightness + 50)})`;
+      
+      // Draw star
+      ctx.beginPath();
+      ctx.arc(projX, projY, size, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw trail for fast stars
+      if (star.z < 300) {
+        const trailLength = (1 - star.z / 300) * 20;
+        ctx.strokeStyle = `rgba(${brightness}, ${brightness}, ${Math.min(255, brightness + 50)}, 0.5)`;
+        ctx.lineWidth = size * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(projX, projY);
+        ctx.lineTo(projX - (star.x / star.z) * trailLength, projY - (star.y / star.z) * trailLength);
+        ctx.stroke();
+      }
+    }
+    
     // Transform for pan & zoom (centered)
     ctx.save();
     ctx.translate(canvas.width / 2, canvas.height / 2);
@@ -471,7 +549,7 @@ export default function StellkinPage() {
     ctx.textAlign = "right";
     ctx.fillText(`${Math.round(zoom * 100)}%`, canvas.width - 20, 30);
     
-  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode]);
+  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount]);
   
   // Resize handler
   useEffect(() => {
