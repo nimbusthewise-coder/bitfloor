@@ -389,14 +389,7 @@ export function updatePhysics(
   const worldWidth = tileGrid[0].length * PHYSICS.TILE_SIZE;
   const worldHeight = tileGrid.length * PHYSICS.TILE_SIZE;
   
-  // DEBUG: Log if we're about to clamp
-  const needsClampX = newState.x < 0 || newState.x + newState.width > worldWidth;
-  const needsClampY = newState.y < 0 || newState.y + newState.height > worldHeight;
-  if (needsClampX || needsClampY) {
-    console.log(`[CLAMP] Before: (${newState.x.toFixed(1)},${newState.y.toFixed(1)}) vel=(${newState.vx.toFixed(2)},${newState.vy.toFixed(2)}) bounds=(${worldWidth},${worldHeight})`);
-  }
-  
-  // Clamp position to world bounds
+  // Clamp position to world bounds (silently - no logging for performance)
   if (newState.x < 0) {
     newState.x = 0;
     newState.vx = 0;
@@ -411,11 +404,6 @@ export function updatePhysics(
   } else if (newState.y + newState.height > worldHeight) {
     newState.y = worldHeight - newState.height;
     newState.vy = 0;
-  }
-  
-  // DEBUG: Confirm clamp result
-  if (needsClampX || needsClampY) {
-    console.log(`[CLAMP] After:  (${newState.x.toFixed(1)},${newState.y.toFixed(1)}) vel=(${newState.vx.toFixed(2)},${newState.vy.toFixed(2)})`);
   }
   
   return newState;

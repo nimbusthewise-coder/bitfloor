@@ -202,13 +202,8 @@ function simulateJump(
     lateral: lateralInput,
   };
   
-  // Debug logging for fall simulations - focus on specific test case (8,4) RIGHT
-  const startCell = pixelToCell(startX, startY);
-  const debugFalls = !isJump && gravity === "RIGHT" && startCell.x === 8 && (startCell.y === 4 || startCell.y === 5);
-  if (debugFalls) {
-    console.log(`[PLANNER-FALL-DEBUG] Starting from (${startCell.x},${startCell.y}) grav=${gravity} lateral=${lateralInput}`);
-    console.log(`  Pixel coords: (${startX.toFixed(1)}, ${startY.toFixed(1)}) → topLeft: (${(startX - COLLIDER/2).toFixed(1)}, ${(startY - COLLIDER/2).toFixed(1)})`);
-  }
+  // Debug logging disabled for performance
+  const debugFalls = false;
   
   if (debug) {
     console.log(`  simulateJump: start=(${startX.toFixed(1)}, ${startY.toFixed(1)}), grav=${gravity}, lateral=${lateralInput}, isJump=${isJump}`);
@@ -555,11 +550,11 @@ export function calculateReachableCells(
     }
   }
   
-  // Debug: log summary
-  if (reachable.length > 0) {
-    const multiJump = reachable.filter(r => r.path.length > 1);
-    console.log(`[Pathfind] ${reachable.length} reachable, ${multiJump.length} multi-jump paths`);
-  }
+  // Debug summary disabled for performance
+  // if (reachable.length > 0) {
+  //   const multiJump = reachable.filter(r => r.path.length > 1);
+  //   console.log(`[Pathfind] ${reachable.length} reachable, ${multiJump.length} multi-jump paths`);
+  // }
   
   return reachable;
 }
