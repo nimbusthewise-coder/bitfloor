@@ -52,21 +52,21 @@ import {
 } from "@/lib/pathfinding-tests";
 
 // Character identities
-// JP - Player character (green suit, round glasses)
+// JP - Player character (violet suit, round glasses) - Creative Director 💜
 const jp: Identity = {
   id: "jp",
   name: "JP",
   faceDNA: [0, 6, 0, 2, 8, 3, 8, 5],  // Round glasses!
   tints: {
-    Suit: "#4ade80",
-    Gloves: "#22c55e",
-    Boots: "#166534",
-    Helmet: "#86efac",
+    Suit: "#a855f7",     // Violet/purple
+    Gloves: "#9333ea",
+    Boots: "#6b21a8",
+    Helmet: "#c084fc",
   },
   faceTints: {
     skin: "#ffd5b5",
     hair: "#4a3728",
-    background: "#d4fcd4",
+    background: "#ede9fe",
   },
   speed: 1,
 };
@@ -2135,14 +2135,14 @@ export default function ShipPage() {
       ctx.restore();
     };
     
-    // Draw JP (Player - green)
+    // Draw JP (Player - violet)
     drawCharacter(
       charPhysicsRef.current, 
       jpBaked, 
       charFrameRef.current,
       charDirRef.current,
       displayRotationRef.current,
-      "#4ade80"
+      "#a855f7"
     );
     
     // Draw Codex (AI - orange)
