@@ -1300,6 +1300,16 @@ export default function ShipPage() {
                   }
                 }
                 
+                // DEBUG: Log merge results
+                if (nimDebug) {
+                  if (walkEndIndex !== nimJumpIndex) {
+                    console.log(`[NimDBG] MERGED walks: ${nimJumpIndex} → ${walkEndIndex} (${walkEndIndex - nimJumpIndex + 1} cells)`);
+                  } else {
+                    const pathActions = nimCurrentPathRef.current.map((a: any) => a.action).join(', ');
+                    console.log(`[NimDBG] NO MERGE at ${nimJumpIndex}, walkDir=${walkDir}, path=[${pathActions}]`);
+                  }
+                }
+                
                 // Target is the FINAL cell of the merged walk
                 const finalAction = nimCurrentPathRef.current[walkEndIndex];
                 const finalTargetX = (finalAction.landing?.x ?? finalAction.start.x) * TILE + TILE / 2;
@@ -1319,6 +1329,10 @@ export default function ShipPage() {
                                    (walkDir === "walk-left" && lateralDelta > TILE * 0.3);
                 
                 if (Math.abs(lateralDelta) < TILE * 0.25 || isOvershot) {
+                  // DEBUG: Log completion trigger
+                  if (nimDebug) {
+                    console.log(`[NimDBG] WALK COMPLETE: lateralDelta=${lateralDelta.toFixed(1)}, isOvershot=${isOvershot}, merged=${nimJumpIndex}→${walkEndIndex}, advancing to ${walkEndIndex + 1}`);
+                  }
                   // Reached or passed the end of the merged walk — skip all walked steps
                   // Zero velocity to prevent coasting/overshoot ping-pong
                   const moveRightForZero = getMoveRightVector(nimGrav);
