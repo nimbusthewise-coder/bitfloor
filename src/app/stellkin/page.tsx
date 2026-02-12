@@ -225,6 +225,29 @@ export default function StellkinPage() {
       }
     }
     
+    // Draw center lines (crosshairs)
+    if (showGrid && editorMode) {
+      ctx.strokeStyle = "rgba(0, 255, 255, 0.4)";
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([4 / zoom, 4 / zoom]);
+      
+      // Vertical center line
+      const centerX = (shipW / 2) * TILE;
+      ctx.beginPath();
+      ctx.moveTo(centerX, 0);
+      ctx.lineTo(centerX, shipH * TILE);
+      ctx.stroke();
+      
+      // Horizontal center line
+      const centerY = (shipH / 2) * TILE;
+      ctx.beginPath();
+      ctx.moveTo(0, centerY);
+      ctx.lineTo(shipW * TILE, centerY);
+      ctx.stroke();
+      
+      ctx.setLineDash([]);
+    }
+    
     // Draw ship boundary
     ctx.strokeStyle = editorMode ? "#00ffff" : "#333";
     ctx.lineWidth = 2 / zoom;
