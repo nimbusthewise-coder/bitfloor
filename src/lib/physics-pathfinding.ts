@@ -157,7 +157,8 @@ function getGravVec(gravity: PhysGravity): { x: number; y: number } {
   }
 }
 
-// Simulate one jump with given lateral input
+// Simulate one jump or fall with given lateral input
+// When isJump=false, simulates stepping off an edge and falling (no upward impulse)
 function simulateJump(
   startX: number,
   startY: number,
@@ -166,7 +167,8 @@ function simulateJump(
   grid: string[][],
   solidTypes: string[],
   maxFrames: number = 120,
-  debug: boolean = false
+  debug: boolean = false,
+  isJump: boolean = true  // false = fall/drop off edge
 ): JumpResult | null {
   const gravVec = getGravVec(gravity);
   const jumpDir = { x: -gravVec.x, y: -gravVec.y };
@@ -174,8 +176,9 @@ function simulateJump(
   
   let x = startX;
   let y = startY;
-  let vx = jumpDir.x * PHYSICS.JUMP_FORCE;
-  let vy = jumpDir.y * PHYSICS.JUMP_FORCE;
+  // Jump: apply upward impulse; Fall: start with zero vertical velocity
+  let vx = isJump ? jumpDir.x * PHYSICS.JUMP_FORCE : 0;
+  let vy = isJump ? jumpDir.y * PHYSICS.JUMP_FORCE : 0;
   
   // Note: No initial lateral velocity - matches actual physics
   // Lateral velocity builds up through air control during jump
@@ -222,8 +225,9 @@ function simulateJump(
       break;
     }
     
-    // Check collision
-    if (isSolid(grid, cell.x, cell.y, solidTypes)) {
+    // Check collision using AABB (full hitbox, not just center point)
+    // This prevents planning arcs where the character body would clip through geometry
+    if (aabbOverlapsSolidAtCenter(x, y, grid, solidTypes)) {
       // Hit something - check if we can land on it
       const hitCell = { x: cell.x, y: cell.y };
       
@@ -272,7 +276,9 @@ function simulateJump(
           trajectory,
           landing: { x: landingCell.x, y: landingCell.y, gravity: newGravity },
           lateral: lateralInput,
-          action: lateralInput === 0 ? "jump" : lateralInput < 0 ? "jump-left" : "jump-right",
+          action: isJump 
+            ? (lateralInput === 0 ? "jump" : lateralInput < 0 ? "jump-left" : "jump-right")
+            : (lateralInput === 0 ? "fall" : lateralInput < 0 ? "fall-left" : "fall-right"),
           cost: calculateJumpCellCost(trajectory)
         };
       }
@@ -475,6 +481,52 @@ export function calculateReachableCells(
             cost: newCost,
             path: [...current.path, result]
           }, newCost);
+        }
+      }
+    }
+    
+    // === FALL OPTIONS (walk off edge and drop) ===
+    // Sometimes stepping off a ledge is better than jumping
+    // Only try falls from edges (where we DON'T have lateral support)
+    for (const lateral of lateralInputs) {
+      if (lateral === 0) continue; // Need lateral movement to walk off edge
+      
+      // Check if there's empty space in the lateral direction (edge to fall from)
+      const destCell = lateral < 0 ? laterals.left : laterals.right;
+      const destCenter = cellToPixel(destCell.x, destCell.y, current.gravity);
+      
+      // Can only fall if destination has no ground support (it's an edge)
+      if (!aabbOverlapsSolidAtCenter(destCenter.x, destCenter.y, grid, solidTypes) &&
+          !hasSupportAtCenter(destCenter.x, destCenter.y, current.gravity, grid, solidTypes)) {
+        
+        const fallResult = simulateJump(
+          destCenter.x,  // Start from the edge cell (one step over)
+          destCenter.y,
+          current.gravity,
+          lateral,
+          grid,
+          solidTypes,
+          120,
+          false,
+          false  // isJump = false (fall)
+        );
+        
+        if (fallResult?.landing) {
+          const key = `${fallResult.landing.x},${fallResult.landing.y},${fallResult.landing.gravity}`;
+          // Fall cost: 1 walk cell + trajectory cells
+          const newCost = current.cost + CELL_COST + fallResult.cost;
+          const existingCost = bestCost.get(key);
+          
+          if (existingCost === undefined || newCost < existingCost) {
+            bestCost.set(key, newCost);
+            queue.push({
+              x: fallResult.landing.x,
+              y: fallResult.landing.y,
+              gravity: fallResult.landing.gravity,
+              cost: newCost,
+              path: [...current.path, fallResult]
+            }, newCost);
+          }
         }
       }
     }

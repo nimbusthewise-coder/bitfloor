@@ -1364,8 +1364,8 @@ export default function ShipPage() {
                     stuck.count = 0;
                   }
                 }
-              } else if (nimAction.action.startsWith("jump")) {
-                // Reset walk stuck counter when we transition into a jump
+              } else if (nimAction.action.startsWith("jump") || nimAction.action.startsWith("fall")) {
+                // Reset walk stuck counter when we transition into a jump/fall
                 nimWalkStuckRef.current.count = 0;
                 // Zero out lateral velocity before jumping so arc matches simulation
                 // (simulation assumes zero starting lateral speed)
@@ -1379,7 +1379,12 @@ export default function ShipPage() {
                 // (Value is gravity-relative: -1..+1 along moveRightVec.)
                 nimInput.lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
 
-                nimInput.jump = true;
+                // Jumps need jump button; falls just walk off edge (no jump impulse)
+                if (nimAction.action.startsWith("jump")) {
+                  nimInput.jump = true;
+                }
+                // For falls, lateral input alone will walk character off edge
+                
                 nimPathProgressRef.current = nimJumpIndex + 0.5;
               }
             }
@@ -1538,7 +1543,7 @@ export default function ShipPage() {
         const py = (step.node.y - startTileY) * TILE + TILE / 2;
         ctx.beginPath();
         ctx.arc(px, py, i === 0 ? 6 : 4, 0, Math.PI * 2);
-        ctx.fillStyle = step.action === "jump" ? "#ff6b6b" : "#fb923c";
+        ctx.fillStyle = step.action.startsWith("jump") ? "#ff6b6b" : step.action.startsWith("fall") ? "#fbbf24" : "#fb923c";
         ctx.fill();
       }
     }
