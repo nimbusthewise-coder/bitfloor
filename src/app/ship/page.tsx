@@ -289,6 +289,17 @@ export default function ShipPage() {
   const [viewX, setViewX] = useState(0);
   const [viewY, setViewY] = useState(6);  // Focus on lower deck where Cargo is
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  
+  // === SHIP EDITOR ===
+  const [editorMode, setEditorMode] = useState(false);
+  const [selectedTile, setSelectedTile] = useState<CellType>("floor");
+  const [editorGrid, setEditorGrid] = useState<CellType[][]>(() => 
+    shipGrid.map(row => [...row])  // Deep copy of initial grid
+  );
+  const editorGridRef = useRef(editorGrid);
+  const editorModeRef = useRef(editorMode);
+  useEffect(() => { editorGridRef.current = editorGrid; }, [editorGrid]);
+  useEffect(() => { editorModeRef.current = editorMode; }, [editorMode]);
 
   // rAF loop reads/writes these refs; React state is only for rendering/UI.
   const viewXRef = useRef(viewX);
@@ -535,6 +546,11 @@ export default function ShipPage() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current.add(e.key.toLowerCase());
+      
+      // 'E' toggles editor mode
+      if (e.key.toLowerCase() === "e" && !e.repeat) {
+        setEditorMode(prev => !prev);
+      }
       
       // Arrows = viewport scroll
       if (e.key === "ArrowLeft") handleScroll(-1, 0);
@@ -1916,20 +1932,21 @@ export default function ShipPage() {
     const endTileX = Math.min(startTileX + VIEW_W + 1, SHIP_W);
     const endTileY = Math.min(startTileY + VIEW_H + 1, SHIP_H);
     
-    // Draw tiles
+    // Draw tiles (use editorGrid for live editing)
+    const gridToRender = editorGridRef.current;
     for (let ty = startTileY; ty < endTileY; ty++) {
       for (let tx = startTileX; tx < endTileX; tx++) {
         if (ty >= 0 && ty < SHIP_H && tx >= 0 && tx < SHIP_W) {
-          const cell = shipGrid[ty][tx];
+          const cell = gridToRender[ty][tx];
           const screenX = (tx - startTileX) * TILE;
           const screenY = (ty - startTileY) * TILE;
           
           ctx.fillStyle = COLORS[cell as keyof typeof COLORS];
           ctx.fillRect(screenX, screenY, TILE, TILE);
           
-          // Draw grid overlay if enabled
-          if (showGrid) {
-            ctx.strokeStyle = "rgba(255,255,255,0.1)";
+          // Draw grid overlay if enabled (always on in editor mode)
+          if (showGrid || editorModeRef.current) {
+            ctx.strokeStyle = editorModeRef.current ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)";
             ctx.strokeRect(screenX, screenY, TILE, TILE);
           }
         }
@@ -2263,7 +2280,7 @@ export default function ShipPage() {
       fontSize: 10,
     }}>
       <h1 style={{ fontSize: 14, color: "#0f0", marginBottom: 20 }}>
-        BITSHIP - DECK VIEW
+        {editorMode ? "✏️ STELLKIN EDITOR" : "🚀 STELLKIN"}
       </h1>
 
       {/* Controls */}
@@ -2607,7 +2624,60 @@ export default function ShipPage() {
         }}>
           {charPhysics.gravity} | {charPhysics.grounded ? "🦶" : "🪂"}
         </span>
+        <button
+          onClick={() => setEditorMode(e => !e)}
+          style={{
+            padding: "4px 8px",
+            background: editorMode ? "#00d4d4" : "#333",
+            color: editorMode ? "#000" : "#00d4d4",
+            border: "1px solid #00d4d4",
+            cursor: "pointer",
+            fontWeight: editorMode ? "bold" : "normal",
+          }}
+        >
+          ✏️ EDIT {editorMode ? "ON" : "OFF"}
+        </button>
       </div>
+      
+      {/* Editor Tile Palette */}
+      {editorMode && (
+        <div style={{
+          marginBottom: 10,
+          padding: "8px 12px",
+          background: "#1a1a2e",
+          border: "1px solid #00d4d4",
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}>
+          <span style={{ color: "#00d4d4", fontSize: 10 }}>TILES:</span>
+          {Object.entries(COLORS).map(([name, color]) => (
+            <button
+              key={name}
+              onClick={() => setSelectedTile(name as CellType)}
+              style={{
+                width: 28,
+                height: 28,
+                background: color,
+                border: selectedTile === name ? "2px solid #fff" : "1px solid #666",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 8,
+                color: name === "space" || name === "shaft" || name === "hallway" || name === "interior" ? "#fff" : "#000",
+              }}
+              title={name}
+            >
+              {selectedTile === name ? "✓" : ""}
+            </button>
+          ))}
+          <span style={{ color: "#888", fontSize: 9, marginLeft: 10 }}>
+            Left-click = place | Right-click = erase | Press E = toggle
+          </span>
+        </div>
+      )}
       
       {gameMessage && (
         <div style={{
@@ -2783,6 +2853,37 @@ export default function ShipPage() {
           ref={gameCanvasRef}
           width={VIEW_W * TILE}
           height={VIEW_H * TILE}
+          onClick={(e) => {
+            if (!editorMode) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const tileX = Math.floor(clickX / TILE) + viewXRef.current;
+            const tileY = Math.floor(clickY / TILE) + viewYRef.current;
+            if (tileX >= 0 && tileX < SHIP_W && tileY >= 0 && tileY < SHIP_H) {
+              setEditorGrid(prev => {
+                const newGrid = prev.map(row => [...row]);
+                newGrid[tileY][tileX] = selectedTile;
+                return newGrid;
+              });
+            }
+          }}
+          onContextMenu={(e) => {
+            if (!editorMode) return;
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const tileX = Math.floor(clickX / TILE) + viewXRef.current;
+            const tileY = Math.floor(clickY / TILE) + viewYRef.current;
+            if (tileX >= 0 && tileX < SHIP_W && tileY >= 0 && tileY < SHIP_H) {
+              setEditorGrid(prev => {
+                const newGrid = prev.map(row => [...row]);
+                newGrid[tileY][tileX] = "space";
+                return newGrid;
+              });
+            }
+          }}
           style={{
             position: "absolute",
             top: 0,
@@ -2791,6 +2892,7 @@ export default function ShipPage() {
             height: VIEW_H * TILE,
             imageRendering: "pixelated",
             zIndex: 20,
+            cursor: editorMode ? "crosshair" : "default",
           }}
         />
         
