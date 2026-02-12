@@ -1320,6 +1320,19 @@ export default function ShipPage() {
                 
                 if (Math.abs(lateralDelta) < TILE * 0.5 || isOvershot) {
                   // Reached or passed the end of the merged walk — skip all walked steps
+                  // Zero velocity to prevent coasting/overshoot ping-pong
+                  const moveRight = getMoveRightVector(nimGrav);
+                  const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
+                  nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
+                  nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
+                  
+                  // Snap to target cell center if we're close enough
+                  if (Math.abs(lateralDelta) < TILE * 0.8) {
+                    const nimPhys = nimPhysicsRef.current;
+                    nimPhysicsRef.current.x = finalTargetX - nimPhys.width / 2;
+                    nimPhysicsRef.current.y = finalTargetY - nimPhys.height / 2;
+                  }
+                  
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
                   // Keep walking toward the final target.
