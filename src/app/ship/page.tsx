@@ -138,6 +138,9 @@ const ROOM_H = 5;
 const WORLD_WIDTH_PX = SHIP_W * TILE;
 const WORLD_HEIGHT_PX = SHIP_H * TILE;
 
+// Debug flag - set to false for production/performance
+const DEBUG_NIM = false;
+
 /**
  * Clamp physics state to world bounds.
  * This is the SINGLE POINT where boundary enforcement happens for direct position writes.
@@ -145,23 +148,23 @@ const WORLD_HEIGHT_PX = SHIP_H * TILE;
  */
 function clampPhysicsToBounds(physics: PhysicsState): void {
   if (physics.x < 0) {
-    console.log(`[CLAMP] x was ${physics.x}, clamping to 0`);
+    if (DEBUG_NIM) console.log(`[CLAMP] x was ${physics.x}, clamping to 0`);
     physics.x = 0;
     physics.vx = 0;
   } else if (physics.x + physics.width > WORLD_WIDTH_PX) {
     const maxX = WORLD_WIDTH_PX - physics.width;
-    console.log(`[CLAMP] x was ${physics.x}, clamping to ${maxX}`);
+    if (DEBUG_NIM) console.log(`[CLAMP] x was ${physics.x}, clamping to ${maxX}`);
     physics.x = maxX;
     physics.vx = 0;
   }
 
   if (physics.y < 0) {
-    console.log(`[CLAMP] y was ${physics.y}, clamping to 0`);
+    if (DEBUG_NIM) console.log(`[CLAMP] y was ${physics.y}, clamping to 0`);
     physics.y = 0;
     physics.vy = 0;
   } else if (physics.y + physics.height > WORLD_HEIGHT_PX) {
     const maxY = WORLD_HEIGHT_PX - physics.height;
-    console.log(`[CLAMP] y was ${physics.y}, clamping to ${maxY}`);
+    if (DEBUG_NIM) console.log(`[CLAMP] y was ${physics.y}, clamping to ${maxY}`);
     physics.y = maxY;
     physics.vy = 0;
   }
@@ -1263,11 +1266,11 @@ export default function ShipPage() {
           const destCenterY = dest.y * TILE + TILE / 2;
           const distToDest = Math.sqrt(Math.pow(destCenterX - nimCenterX, 2) + Math.pow(destCenterY - nimCenterY, 2));
           
-          console.log(`[NimDBG] 🎬 EXECUTOR COMPLETE: dist to dest = ${distToDest.toFixed(1)}`);
+          if (DEBUG_NIM) console.log(`[NimDBG] 🎬 EXECUTOR COMPLETE: dist to dest = ${distToDest.toFixed(1)}`);
           
           if (distToDest < TILE * 1.5) {
             // Close enough - arrived!
-            console.log("[NimDBG] ✅ ARRIVED at destination!");
+            if (DEBUG_NIM) console.log("[NimDBG] ✅ ARRIVED at destination!");
             setNimDestination(null);
             nimDestinationRef.current = null;
             nimDestKeyRef.current = null;
@@ -1278,7 +1281,7 @@ export default function ShipPage() {
         
         // Debug: log Nim AI state when PATHS is ON (throttled)
         nimDebugTickRef.current++;
-        const nimDebug = showPathsRef.current && (nimDebugTickRef.current % 5 === 0);
+        const nimDebug = DEBUG_NIM && showPathsRef.current && (nimDebugTickRef.current % 5 === 0);
         if (nimDebug) {
           console.log("[NimDBG] dest", dest, "grounded", nimPhys.grounded, "grav", nimPhys.gravity,
             "pathLen", nimCurrentPathRef.current.length,
@@ -1374,19 +1377,21 @@ export default function ShipPage() {
             // NEW: Create frame-based executor for this path
             if (nimUseExecutorRef.current) {
               nimExecutorRef.current = createExecutor(chosenCell.path);
-              console.log(`[NimDBG] 🎬 EXECUTOR CREATED: ${nimExecutorRef.current.frames.length} frames`);
+              if (DEBUG_NIM) console.log(`[NimDBG] 🎬 EXECUTOR CREATED: ${nimExecutorRef.current.frames.length} frames`);
             }
             
-            // Enhanced path logging
-            console.log("[NimDBG] NEW PATH PLANNED:");
-            console.log(`  From tile: (${nimTileX}, ${nimTileY}) gravity=${nimPhys.gravity}`);
-            console.log(`  To dest: (${dest.x}, ${dest.y})`);
-            console.log(`  Path steps (${chosenCell.path.length}):`);
-            for (let i = 0; i < chosenCell.path.length; i++) {
-              const step = chosenCell.path[i];
-              const landX = step.landing?.x ?? "null";
-              const landY = step.landing?.y ?? "null";
-              console.log(`    [${i}] ${step.action}: start=(${step.start.x},${step.start.y},${step.start.gravity}) → landing=(${landX},${landY})`);
+            // Enhanced path logging (debug only)
+            if (DEBUG_NIM) {
+              console.log("[NimDBG] NEW PATH PLANNED:");
+              console.log(`  From tile: (${nimTileX}, ${nimTileY}) gravity=${nimPhys.gravity}`);
+              console.log(`  To dest: (${dest.x}, ${dest.y})`);
+              console.log(`  Path steps (${chosenCell.path.length}):`);
+              for (let i = 0; i < chosenCell.path.length; i++) {
+                const step = chosenCell.path[i];
+                const landX = step.landing?.x ?? "null";
+                const landY = step.landing?.y ?? "null";
+                console.log(`    [${i}] ${step.action}: start=(${step.start.x},${step.start.y},${step.start.gravity}) → landing=(${landX},${landY})`);
+              }
             }
             if (nimDebug) console.log("[NimDBG] planned", { actions: chosenCell.path.length, minDist, cost: bestCost, bestKey: chosenKey });
           } else {
