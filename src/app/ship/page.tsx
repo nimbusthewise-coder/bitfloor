@@ -718,11 +718,14 @@ export default function ShipPage() {
               const destCenterY = dest.y * TILE + TILE / 2;
               const dist = Math.sqrt(Math.pow(destCenterX - centerX, 2) + Math.pow(destCenterY - centerY, 2));
               
-              if (dist < TILE * 0.5) {
-                // Arrived! Stop executor and clear destination
+              if (dist < TILE * 0.7) {
+                // Arrived! Stop executor, zero velocity, snap to destination
                 nimExecutorRef.current = null;
                 nimPhysicsRef.current.vx = 0;
                 nimPhysicsRef.current.vy = 0;
+                // Snap to destination cell center (adjusted for gravity)
+                nimPhysicsRef.current.x = destCenterX - PLAYER.COLLIDER_SIZE / 2;
+                nimPhysicsRef.current.y = destCenterY - PLAYER.COLLIDER_SIZE / 2;
                 nimDestinationRef.current = null;
                 // Note: setNimDestination will be called in AI tick
               }
@@ -1438,18 +1441,25 @@ export default function ShipPage() {
         }
         
         // If we couldn't find a plan yet, fall back to direct steering so Nim always moves.
-        if (nimCurrentPathRef.current.length === 0) {
+        // BUT skip if executor is active (it handles movement)
+        const executorActive = nimUseExecutorRef.current && nimExecutorRef.current && !isComplete(nimExecutorRef.current);
+        if (!executorActive && nimCurrentPathRef.current.length === 0) {
           const destCenterX = dest.x * TILE + TILE / 2;
           const destCenterY = dest.y * TILE + TILE / 2;
           const dx = destCenterX - nimCenterX;
           const dy = destCenterY - nimCenterY;
           const grav = nimPhys.gravity;
-          const closeEnough = Math.abs(dx) + Math.abs(dy) < TILE * 0.5;
+          // Use Euclidean distance, not Manhattan
+          const distToDest = Math.sqrt(dx * dx + dy * dy);
+          const closeEnough = distToDest < TILE * 0.6;
           if (closeEnough) {
+            // Already at destination - stop and clear
             setNimDestination(null);
             nimDestinationRef.current = null;
             nimDestKeyRef.current = null;
-            nimExecutorRef.current = null;  // Clear executor when arrived
+            nimExecutorRef.current = null;
+            nimPhysicsRef.current.vx = 0;
+            nimPhysicsRef.current.vy = 0;
           } else {
             // Move laterally (perpendicular to gravity) toward destination
             // Physics handles gravity inversion via getMoveRightVector.
