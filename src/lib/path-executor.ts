@@ -36,7 +36,7 @@ export interface ExecutorState {
  */
 const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps (walking)
 const RUN_FRAMES_PER_TILE = 6;    // ~0.1 seconds per tile at 60fps (running)
-const RUN_THRESHOLD_TILES = 2;    // Run when distance > 2 tiles
+const RUN_THRESHOLD_TILES = 1;    // Run when distance > 1 tile
 
 export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
   const frames: ExecutorFrame[] = [];
