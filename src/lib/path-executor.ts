@@ -34,6 +34,9 @@ export interface ExecutorState {
  * Convert a path (array of JumpResults) into a flat array of executor frames.
  * Each JumpResult contains a trajectory with frame-by-frame positions.
  */
+const TILE = 32;
+const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps
+
 export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
   const frames: ExecutorFrame[] = [];
   const halfCollider = PLAYER.COLLIDER_SIZE / 2;
@@ -42,6 +45,40 @@ export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
     const action = path[actionIdx];
     const trajectory = action.trajectory;
     const isWalk = action.action.startsWith("walk");
+    
+    // For walks with empty trajectory, generate interpolated frames
+    if (isWalk && trajectory.length === 0 && action.landing) {
+      const startX = action.start.x * TILE + TILE / 2;
+      const startY = action.start.y * TILE + TILE / 2;
+      const endX = action.landing.x * TILE + TILE / 2;
+      const endY = action.landing.y * TILE + TILE / 2;
+      
+      const dx = endX - startX;
+      const dy = endY - startY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const numFrames = Math.max(1, Math.round(distance / TILE * WALK_FRAMES_PER_TILE));
+      
+      for (let i = 0; i <= numFrames; i++) {
+        const t = i / numFrames;
+        const x = startX + dx * t;
+        const y = startY + dy * t;
+        const vx = dx / numFrames;
+        const vy = dy / numFrames;
+        
+        frames.push({
+          x: x - halfCollider,
+          y: y - halfCollider,
+          centerX: x,
+          centerY: y,
+          vx: i === numFrames ? 0 : vx,  // Zero velocity on last frame
+          vy: i === numFrames ? 0 : vy,
+          gravity: action.landing.gravity as GravityDirection,
+          grounded: true,
+          action: action.action,
+        });
+      }
+      continue;  // Skip the normal trajectory loop
+    }
     
     for (let i = 0; i < trajectory.length; i++) {
       const point = trajectory[i];
