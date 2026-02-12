@@ -34,7 +34,9 @@ export interface ExecutorState {
  * Convert a path (array of JumpResults) into a flat array of executor frames.
  * Each JumpResult contains a trajectory with frame-by-frame positions.
  */
-const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps
+const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps (walking)
+const RUN_FRAMES_PER_TILE = 6;    // ~0.1 seconds per tile at 60fps (running)
+const RUN_THRESHOLD_TILES = 2;    // Run when distance > 2 tiles
 
 export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
   const frames: ExecutorFrame[] = [];
@@ -55,7 +57,23 @@ export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
       const dx = endX - startX;
       const dy = endY - startY;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      const numFrames = Math.max(1, Math.round(distance / TILE * WALK_FRAMES_PER_TILE));
+      
+      // Count consecutive walks in the same direction to determine run vs walk
+      let consecutiveWalks = 1;
+      const walkDir = action.action; // "walk-left" or "walk-right"
+      for (let j = actionIdx + 1; j < path.length; j++) {
+        if (path[j].action === walkDir) {
+          consecutiveWalks++;
+        } else {
+          break;
+        }
+      }
+      
+      // Run if total walk distance > threshold, otherwise walk
+      const framesPerTile = consecutiveWalks > RUN_THRESHOLD_TILES 
+        ? RUN_FRAMES_PER_TILE 
+        : WALK_FRAMES_PER_TILE;
+      const numFrames = Math.max(1, Math.round(distance / TILE * framesPerTile));
       
       for (let i = 0; i <= numFrames; i++) {
         const t = i / numFrames;
@@ -63,6 +81,12 @@ export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
         const y = startY + dy * t;
         const vx = dx / numFrames;
         const vy = dy / numFrames;
+        
+          // Use "run-left"/"run-right" action when running for animation purposes
+        const isRunning = consecutiveWalks > RUN_THRESHOLD_TILES;
+        const animAction = isRunning 
+          ? action.action.replace("walk", "run") 
+          : action.action;
         
         frames.push({
           x: x - halfCollider,
@@ -73,7 +97,7 @@ export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
           vy: i === numFrames ? 0 : vy,
           gravity: action.landing.gravity as GravityDirection,
           grounded: true,
-          action: action.action,
+          action: animAction,
         });
       }
       continue;  // Skip the normal trajectory loop
