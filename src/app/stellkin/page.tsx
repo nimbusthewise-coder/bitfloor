@@ -395,6 +395,7 @@ export default function StellkinPage() {
   useEffect(() => { editorModeRef.current = editorMode; }, [editorMode]);
   const [selectedTile, setSelectedTile] = useState<TileType>("floor");
   const [showGrid, setShowGrid] = useState(true);
+  const [cameraFollow, setCameraFollow] = useState(true);  // Follow player in play mode
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawMode, setDrawMode] = useState<"place" | "erase">("place");
   
@@ -577,6 +578,9 @@ export default function StellkinPage() {
       }
       if (e.key.toLowerCase() === "g" && !e.repeat) {
         setShowGrid(prev => !prev);
+      }
+      if (e.key.toLowerCase() === "c" && !e.repeat) {
+        setCameraFollow(prev => !prev);
       }
       // Arrow keys for panning
       const panSpeed = 20 / zoom;
@@ -939,6 +943,23 @@ export default function StellkinPage() {
     
   }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions, bakedSprites, spritesLoaded, crewAnimations]);
   
+  // Camera follow - center view on player when in play mode
+  useEffect(() => {
+    if (editorMode || !cameraFollow) return;
+    
+    const jp = crewPositions.get(playerId);
+    if (!jp) return;
+    
+    // Calculate pan to center on player
+    // Pan is the offset from center, so we need to move the view so JP is at center
+    const targetPanX = -(jp.x - (shipW * TILE) / 2);
+    const targetPanY = -(jp.y - (shipH * TILE) / 2);
+    
+    // Smooth camera movement
+    setPanX(prev => prev + (targetPanX - prev) * 0.1);
+    setPanY(prev => prev + (targetPanY - prev) * 0.1);
+  }, [crewPositions, editorMode, cameraFollow, shipW, shipH]);
+  
   // Room preview (Luma's quarter)
   useEffect(() => {
     const canvas = roomCanvasRef.current;
@@ -1173,7 +1194,7 @@ export default function StellkinPage() {
         {editorMode ? (
           <>Left-click: place | Right-click: erase | Scroll: zoom | Space+drag: pan | E: toggle mode | G: grid</>
         ) : (
-          <>WASD: move | Space+drag: pan | E: toggle editor</>
+          <>WASD: move | Space+drag: pan | C: camera follow | E: toggle editor</>
         )}
       </div>
     </div>
