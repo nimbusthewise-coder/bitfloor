@@ -75,11 +75,11 @@ function cellToPixel(x: number, y: number, gravity: PhysGravity): { x: number; y
       // Standing on ceiling - center is offset down from cell top  
       return { x: x * TILE + halfTile, y: y * TILE + halfCollider };
     case "LEFT":
-      // Standing on left wall - center is offset right from cell left
-      return { x: x * TILE + halfCollider, y: y * TILE + halfTile };
-    case "RIGHT":
-      // Standing on right wall - center is offset left from cell right
+      // Gravity pulls LEFT, so character is pushed against RIGHT side of cell
       return { x: x * TILE + TILE - halfCollider, y: y * TILE + halfTile };
+    case "RIGHT":
+      // Gravity pulls RIGHT, so character is pushed against LEFT side of cell
+      return { x: x * TILE + halfCollider, y: y * TILE + halfTile };
   }
 }
 
