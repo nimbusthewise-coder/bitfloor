@@ -43,6 +43,19 @@ export interface ReachableCell {
 }
 
 const TILE = 32;
+const CELL_COST = 4;  // Cost per cell traversed (walk or jump arc)
+
+// Calculate jump cost based on unique cells traversed in the arc
+function calculateJumpCellCost(trajectory: Array<{ x: number; y: number }>): number {
+  const visited = new Set<string>();
+  for (const point of trajectory) {
+    const cellX = Math.floor(point.x / TILE);
+    const cellY = Math.floor(point.y / TILE);
+    visited.add(`${cellX},${cellY}`);
+  }
+  // Minimum cost of 1 cell even for very short jumps
+  return Math.max(1, visited.size) * CELL_COST;
+}
 
 // Convert grid cell to pixel position based on gravity
 // The position is the character's center point
@@ -260,7 +273,7 @@ function simulateJump(
           landing: { x: landingCell.x, y: landingCell.y, gravity: newGravity },
           lateral: lateralInput,
           action: lateralInput === 0 ? "jump" : lateralInput < 0 ? "jump-left" : "jump-right",
-          cost: frame
+          cost: calculateJumpCellCost(trajectory)
         };
       }
       break; // Invalid landing
@@ -380,7 +393,7 @@ export function calculateReachableCells(
     if (!aabbOverlapsSolidAtCenter(leftCenter.x, leftCenter.y, grid, solidTypes) &&
         hasSupportAtCenter(leftCenter.x, leftCenter.y, current.gravity, grid, solidTypes)) {
       const key = `${leftDest.x},${leftDest.y},${current.gravity}`;
-      const newCost = current.cost + 8; // Walking cost (slightly lower than 10 to encourage it)
+      const newCost = current.cost + CELL_COST; // Walking cost: 4 per cell
       const existingCost = bestCost.get(key);
       
       if (existingCost === undefined || newCost < existingCost) {
@@ -397,7 +410,7 @@ export function calculateReachableCells(
             landing: { x: leftDest.x, y: leftDest.y, gravity: current.gravity },
             lateral: -1,
             action: "walk-left",
-            cost: 8
+            cost: CELL_COST
           }]
         }, newCost);
       }
@@ -409,7 +422,7 @@ export function calculateReachableCells(
     if (!aabbOverlapsSolidAtCenter(rightCenter.x, rightCenter.y, grid, solidTypes) &&
         hasSupportAtCenter(rightCenter.x, rightCenter.y, current.gravity, grid, solidTypes)) {
       const key = `${rightDest.x},${rightDest.y},${current.gravity}`;
-      const newCost = current.cost + 8; // Walking cost
+      const newCost = current.cost + CELL_COST; // Walking cost: 4 per cell
       const existingCost = bestCost.get(key);
       
       if (existingCost === undefined || newCost < existingCost) {
@@ -426,7 +439,7 @@ export function calculateReachableCells(
             landing: { x: rightDest.x, y: rightDest.y, gravity: current.gravity },
             lateral: 1,
             action: "walk-right",
-            cost: 8
+            cost: CELL_COST
           }]
         }, newCost);
       }
