@@ -484,12 +484,15 @@ export default function StellkinPage() {
     ctx.translate(panX, panY);
     ctx.translate(-(shipW * TILE) / 2, -(shipH * TILE) / 2);
     
-    // Draw tiles
+    // Draw tiles (skip space tiles to show starfield)
     for (let y = 0; y < shipH; y++) {
       for (let x = 0; x < shipW; x++) {
         const tile = grid[y][x];
-        const tileData = TILES[tile];
         
+        // Skip space tiles - let starfield show through
+        if (tile === "space") continue;
+        
+        const tileData = TILES[tile];
         ctx.fillStyle = tileData.color;
         ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
         
