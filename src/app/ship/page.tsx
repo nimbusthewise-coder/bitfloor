@@ -1394,8 +1394,22 @@ export default function ShipPage() {
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
                   // Keep walking/falling toward the final target.
-                  // Use direction from action name (works for both walk-* and fall-*)
-                  nimInput.lateral = currentDir === "left" ? -1 : 1;
+                  // Convert walk direction to screen input based on gravity
+                  const lateral = currentDir === "left" ? -1 : 1;
+                  if (nimGrav === "DOWN") {
+                    if (lateral < 0) nimInput.left = true;
+                    else nimInput.right = true;
+                  } else if (nimGrav === "UP") {
+                    // UP gravity inverts left/right
+                    if (lateral < 0) nimInput.right = true;
+                    else nimInput.left = true;
+                  } else if (nimGrav === "LEFT") {
+                    if (lateral < 0) nimInput.up = true;
+                    else nimInput.down = true;
+                  } else if (nimGrav === "RIGHT") {
+                    if (lateral < 0) nimInput.down = true;
+                    else nimInput.up = true;
+                  }
 
                   // Stuck detection: if we're issuing walk but not moving, clear the plan so we can replan.
                   const stuck = nimWalkStuckRef.current;
@@ -1436,7 +1450,23 @@ export default function ShipPage() {
                 // ANALOG EXECUTION: use the exact lateral axis value chosen by the planner.
                 // This makes the executed jump match the simulated yellow arc.
                 // (Value is gravity-relative: -1..+1 along moveRightVec.)
-                nimInput.lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
+                const lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
+                
+                // Convert lateral to screen input based on gravity
+                if (nimGrav === "DOWN") {
+                  if (lateral < 0) nimInput.left = true;
+                  else if (lateral > 0) nimInput.right = true;
+                } else if (nimGrav === "UP") {
+                  // UP gravity inverts left/right
+                  if (lateral < 0) nimInput.right = true;
+                  else if (lateral > 0) nimInput.left = true;
+                } else if (nimGrav === "LEFT") {
+                  if (lateral < 0) nimInput.up = true;
+                  else if (lateral > 0) nimInput.down = true;
+                } else if (nimGrav === "RIGHT") {
+                  if (lateral < 0) nimInput.down = true;
+                  else if (lateral > 0) nimInput.up = true;
+                }
 
                 // Jumps need jump button; falls just walk off edge (no jump impulse)
                 if (nimAction.action.startsWith("jump")) {
