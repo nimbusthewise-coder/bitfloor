@@ -44,6 +44,7 @@ export interface ReachableCell {
 
 const TILE = 32;
 const CELL_COST = 4;  // Cost per cell traversed (walk or jump arc)
+const JUMP_PENALTY = 8;  // Extra cost for jumping - prefer walking when possible
 
 // Calculate jump cost based on unique cells traversed in the arc
 function calculateJumpCellCost(trajectory: Array<{ x: number; y: number }>): number {
@@ -482,7 +483,7 @@ export function calculateReachableCells(
       if (result?.landing) {
         jumpsFound++;
         const key = `${result.landing.x},${result.landing.y},${result.landing.gravity}`;
-        const newCost = current.cost + result.cost;
+        const newCost = current.cost + result.cost + JUMP_PENALTY;  // Add penalty to prefer walking
         const existingCost = bestCost.get(key);
         
         // Only add if we haven't seen this state or found a cheaper path
