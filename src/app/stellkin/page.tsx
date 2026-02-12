@@ -83,7 +83,7 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   }
   
   // === RADIAL CORRIDORS (4 directions) ===
-  const corridorLength = 18;
+  const corridorLength = 12;  // Reduced to fit in grid
   const corridorWidth = 3;
   
   // North corridor (to Observatory)
@@ -116,8 +116,8 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   
   // NORTH PETAL: Observatory/Lounge (best view of stars)
   const petalW = 14;
-  const petalH = 10;
-  const northY = centerY - hubSize - corridorLength - petalH;
+  const petalH = 8;
+  const northY = Math.max(1, centerY - hubSize - corridorLength - petalH);
   fillRect(centerX - petalW/2, northY, centerX + petalW/2, northY + petalH, "interior");
   hullRect(centerX - petalW/2, northY, centerX + petalW/2, northY + petalH);
   // Big windows
@@ -132,8 +132,8 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   
   // SOUTH PETAL: Landing Bay (large, open)
   const southY = centerY + hubSize + corridorLength;
-  const bayW = 20;
-  const bayH = 12;
+  const bayW = 18;
+  const bayH = Math.min(10, h - southY - 2);
   fillRect(centerX - bayW/2, southY, centerX + bayW/2, southY + bayH, "interior");
   hullRect(centerX - bayW/2, southY, centerX + bayW/2, southY + bayH);
   // Large door at bottom
@@ -147,8 +147,8 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   
   // EAST PETAL: Crew Quarters (3 bunks)
   const eastX = centerX + hubSize + corridorLength;
-  const crewW = 16;
-  const crewH = 14;
+  const crewW = Math.min(14, w - eastX - 2);
+  const crewH = 12;
   fillRect(eastX, centerY - crewH/2, eastX + crewW, centerY + crewH/2, "interior");
   hullRect(eastX, centerY - crewH/2, eastX + crewW, centerY + crewH/2);
   // Floor
@@ -162,7 +162,7 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   setTile(eastX + crewW, centerY + 2, "window");
   
   // WEST PETAL: Engineering + Teleporter
-  const westX = centerX - hubSize - corridorLength - crewW;
+  const westX = Math.max(1, centerX - hubSize - corridorLength - crewW);
   fillRect(westX, centerY - crewH/2, westX + crewW, centerY + crewH/2, "interior");
   hullRect(westX, centerY - crewH/2, westX + crewW, centerY + crewH/2);
   // Floor
@@ -175,34 +175,36 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
   fillRect(westX + 10, centerY + crewH/2 - 3, westX + 14, centerY + crewH/2 - 3, "door");
   fillRect(westX + 10, centerY + crewH/2 - 2, westX + 14, centerY + crewH/2 - 2, "door");
   
-  // === DIAGONAL PETALS (Games area - NE, NW corners) ===
+  // === DIAGONAL PETALS (Games area - NE corner) ===
   
-  // NE: Games Room
-  const diagOffset = 16;
+  // NE: Games Room (only if it fits)
+  const diagOffset = 12;
   const gamesX = centerX + diagOffset;
-  const gamesY = centerY - diagOffset;
-  const gamesSize = 10;
-  fillRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize, "interior");
-  hullRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize);
-  fillRect(gamesX + 1, gamesY + gamesSize - 1, gamesX + gamesSize - 1, gamesY + gamesSize - 1, "floor");
-  // Arcade tables
-  setTile(gamesX + 3, gamesY + gamesSize - 2, "table");
-  setTile(gamesX + 7, gamesY + gamesSize - 2, "table");
-  // Connect to east corridor with small hallway
-  fillRect(centerX + hubSize + 3, centerY - corridorWidth/2 - 6, centerX + hubSize + 6, centerY - corridorWidth/2 - 1, "interior");
-  fillRect(gamesX, gamesY + gamesSize - 2, gamesX - 3, gamesY + gamesSize - 2, "floor");
+  const gamesY = Math.max(4, centerY - diagOffset);
+  const gamesSize = 8;
+  if (gamesX + gamesSize < w - 1 && gamesY > 2) {
+    fillRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize, "interior");
+    hullRect(gamesX, gamesY, gamesX + gamesSize, gamesY + gamesSize);
+    fillRect(gamesX + 1, gamesY + gamesSize - 1, gamesX + gamesSize - 1, gamesY + gamesSize - 1, "floor");
+    // Arcade tables
+    setTile(gamesX + 2, gamesY + gamesSize - 2, "table");
+    setTile(gamesX + 5, gamesY + gamesSize - 2, "table");
+  }
   
   // === JUMP PLATFORMS (scattered for vertical navigation) ===
   // Add small platforms in corridors for jumping practice
   
-  // North corridor platforms
-  setTile(centerX - 2, centerY - hubSize - 6, "floor");
-  setTile(centerX + 2, centerY - hubSize - 10, "floor");
-  setTile(centerX, centerY - hubSize - 14, "floor");
+  // North corridor platforms (only within corridor)
+  if (centerY - hubSize - 4 > northY + petalH) {
+    setTile(centerX - 1, centerY - hubSize - 4, "floor");
+    setTile(centerX + 1, centerY - hubSize - 8, "floor");
+  }
   
-  // South corridor platforms  
-  setTile(centerX - 2, centerY + hubSize + 6, "floor");
-  setTile(centerX + 2, centerY + hubSize + 10, "floor");
+  // South corridor platforms
+  if (centerY + hubSize + 4 < southY) {
+    setTile(centerX - 1, centerY + hubSize + 4, "floor");
+    setTile(centerX + 1, centerY + hubSize + 8, "floor");
+  }
   
   return grid;
 }
