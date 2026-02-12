@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { drawRoom, LUMA_QUARTER, renderRoomCanvas } from "@/lib/stellkin-room";
+import { drawRoom, LUMA_QUARTER } from "@/lib/stellkin-room";
+import {
+  loadSpriteSheet,
+  loadFaceSheet,
+  bakeIdentitySprites,
+  SpriteSheet,
+  FaceSheet,
+  BakedSprite,
+  Identity,
+} from "@/lib/sprites";
 
 // === STELLKIN SHIP EDITOR ===
 // A clean, focused ship builder for the Stellkin
@@ -234,49 +243,80 @@ function generateStellkinLayout(w: number, h: number): TileType[][] {
 // === STELLKIN CREW ===
 // The four founding members of the Stellkin
 
-interface CrewMember {
-  id: string;
-  name: string;
-  color: string;       // Primary color
-  faceDNA: number[];   // Avatar DNA
-  role: string;
-  speed: number;
-}
-
-const CREW: CrewMember[] = [
-  {
+// Crew identities with full sprite information
+const CREW_IDENTITIES: Record<string, Identity> = {
+  jp: {
     id: "jp",
     name: "JP",
-    color: "#a855f7",  // Violet
     faceDNA: [0, 6, 0, 2, 8, 3, 8, 5],
-    role: "Creative Director",
+    tints: {
+      Suit: "#a855f7",     // Violet
+      Gloves: "#9333ea",
+      Boots: "#6b21a8",
+      Helmet: "#c084fc",
+    },
+    faceTints: {
+      skin: "#ffd5b5",
+      hair: "#ffd5b5",    // Almost bald
+      background: "#ede9fe",
+    },
     speed: 1,
   },
-  {
+  nimbus: {
     id: "nimbus",
-    name: "Nimbus", 
-    color: "#00d4d4",  // Cyan
+    name: "Nimbus",
     faceDNA: [0, 2, 3, 4, 8, 7, 7, 1],
-    role: "Worldbuilder",
+    tints: {
+      Suit: "#00d4d4",     // Cyan
+      Gloves: "#00b8b8",
+      Boots: "#008080",
+      Helmet: "#40e0e0",
+    },
+    faceTints: {
+      skin: "#ffd5b5",
+      hair: "#2d4a5e",
+      background: "#d4f4f4",
+    },
     speed: 1,
   },
-  {
+  sol: {
     id: "sol",
     name: "Sol",
-    color: "#f59e0b",  // Gold
     faceDNA: [0, 3, 3, 3, 8, 5, 3, 2],
-    role: "Craftsperson",
+    tints: {
+      Suit: "#f59e0b",     // Gold/Amber
+      Gloves: "#d97706",
+      Boots: "#b45309",
+      Helmet: "#fbbf24",
+    },
+    faceTints: {
+      skin: "#ffd5b5",
+      hair: "#92400e",
+      background: "#fef3c7",
+    },
     speed: 0.9,
   },
-  {
+  luma: {
     id: "luma",
     name: "Luma",
-    color: "#ec4899",  // Magenta
     faceDNA: [0, 4, 5, 0, 7, 6, 5, 7],
-    role: "Designer",
+    tints: {
+      Suit: "#ec4899",     // Magenta
+      Gloves: "#db2777",
+      Boots: "#be185d",
+      Helmet: "#f472b6",
+    },
+    faceTints: {
+      skin: "#ffd5b5",
+      hair: "#831843",
+      background: "#fce7f3",
+    },
     speed: 1.1,
   },
-];
+};
+
+// Simple crew list for iteration
+const CREW_IDS = ["jp", "nimbus", "sol", "luma"] as const;
 
 // Character physics state
 interface CharacterState {
@@ -337,6 +377,8 @@ function initCrewPositions(shipW: number, shipH: number): Map<string, CharacterS
 export default function StellkinPage() {
   // Grid state (start with generated Stellkin layout)
   const [grid, setGrid] = useState<TileType[][]>(() => generateStellkinLayout(DEFAULT_SHIP_W, DEFAULT_SHIP_H));
+  const gridRef = useRef(grid);
+  useEffect(() => { gridRef.current = grid; }, [grid]);
   const [shipW] = useState(DEFAULT_SHIP_W);
   const [shipH] = useState(DEFAULT_SHIP_H);
   
@@ -372,6 +414,17 @@ export default function StellkinPage() {
   // Track which character is player-controlled
   const playerId = "jp";
   
+  // === SPRITE STATE ===
+  const [spriteSheet, setSpriteSheet] = useState<SpriteSheet | null>(null);
+  const [faceSheet, setFaceSheet] = useState<FaceSheet | null>(null);
+  const [bakedSprites, setBakedSprites] = useState<Map<string, BakedSprite>>(new Map());
+  const [spritesLoaded, setSpritesLoaded] = useState(false);
+  
+  // Animation state per character
+  const [crewAnimations, setCrewAnimations] = useState<Map<string, { frame: number; anim: string }>>(
+    () => new Map(CREW_IDS.map(id => [id, { frame: 0, anim: "Idle" }]))
+  );
+  
   // Starfield animation
   const starsRef = useRef<Array<{x: number, y: number, z: number}>>([]);
   const animFrameRef = useRef<number>(0);
@@ -379,6 +432,37 @@ export default function StellkinPage() {
   // Animation frame counter (forces re-render for starfield)
   const [frameCount, setFrameCount] = useState(0);
   const roomCanvasCache = useRef<Record<string, HTMLCanvasElement>>({});
+  
+  // === LOAD SPRITES ===
+  useEffect(() => {
+    async function loadSprites() {
+      try {
+        const [sheet, faces] = await Promise.all([
+          loadSpriteSheet(
+            "/bitfloor/sprites/character-layers.png",
+            "/bitfloor/sprites/character-layers.json"
+          ),
+          loadFaceSheet("/bitfloor/sprites/face-32.png"),
+        ]);
+        
+        setSpriteSheet(sheet);
+        setFaceSheet(faces);
+        
+        // Bake sprites for each crew member
+        const baked = new Map<string, BakedSprite>();
+        for (const id of CREW_IDS) {
+          const identity = CREW_IDENTITIES[id];
+          baked.set(id, bakeIdentitySprites(sheet, identity, faces));
+        }
+        setBakedSprites(baked);
+        setSpritesLoaded(true);
+        console.log("✅ Stellkin sprites loaded!");
+      } catch (err) {
+        console.error("Failed to load sprites:", err);
+      }
+    }
+    loadSprites();
+  }, []);
   
   // Initialize stars
   useEffect(() => {
@@ -390,17 +474,32 @@ export default function StellkinPage() {
     }));
   }, []);
   
-  // Animation loop for starfield (continuous)
+  // Animation loop for starfield + characters (continuous)
+  const frameTickRef = useRef(0);
+  
   useEffect(() => {
     let running = true;
+    let isMoving = false;
+    
     const animate = () => {
       if (!running) return;
       setFrameCount(f => f + 1);
+      frameTickRef.current++;
       
       // Update player position when not in editor mode
       if (!editorModeRef.current) {
         const keys = keysRef.current;
         const speed = 4; // pixels per frame
+        const g = gridRef.current;
+        
+        // Inline collision check
+        const canWalk = (px: number, py: number): boolean => {
+          const tileX = Math.floor(px / TILE);
+          const tileY = Math.floor(py / TILE);
+          if (tileX < 0 || tileX >= g[0]?.length || tileY < 0 || tileY >= g.length) return false;
+          const t = g[tileY][tileX];
+          return t === "interior" || t === "door" || t === "floor";
+        };
         
         setCrewPositions(prev => {
           const next = new Map(prev);
@@ -412,17 +511,45 @@ export default function StellkinPage() {
             if (keys.up) dy -= speed;
             if (keys.down) dy += speed;
             
-            if (dx !== 0 || dy !== 0) {
+            isMoving = dx !== 0 || dy !== 0;
+            
+            if (isMoving) {
+              // Check collision for new position
+              const newX = jp.x + dx;
+              const newY = jp.y + dy;
+              const canMoveX = canWalk(jp.x + dx, jp.y);
+              const canMoveY = canWalk(jp.x, jp.y + dy);
+              
               next.set(playerId, {
                 ...jp,
-                x: jp.x + dx,
-                y: jp.y + dy,
+                x: canMoveX ? newX : jp.x,
+                y: canMoveY ? newY : jp.y,
                 facing: dx < 0 ? "left" : dx > 0 ? "right" : jp.facing,
               });
+              
+              // Update isMoving based on actual movement
+              isMoving = canMoveX || canMoveY;
             }
           }
           return next;
         });
+        
+        // Update animation frames (every 6 ticks = ~10fps animation)
+        if (frameTickRef.current % 6 === 0) {
+          setCrewAnimations(prev => {
+            const next = new Map(prev);
+            for (const id of CREW_IDS) {
+              const current = next.get(id) || { frame: 0, anim: "Idle" };
+              const anim = id === playerId && isMoving ? "Run" : "Idle";
+              const maxFrames = anim === "Run" ? 8 : 4;
+              next.set(id, {
+                anim,
+                frame: (current.frame + 1) % maxFrames,
+              });
+            }
+            return next;
+          });
+        }
       }
       
       animFrameRef.current = requestAnimationFrame(animate);
@@ -728,45 +855,66 @@ export default function StellkinPage() {
     }
     
     // === RENDER CREW ===
-    // Draw each crew member as a colored circle with their initial
-    for (const member of CREW) {
-      const state = crewPositions.get(member.id);
+    // Draw each crew member with sprites (or fallback circles)
+    const SPRITE_SIZE = 48;
+    
+    for (const id of CREW_IDS) {
+      const state = crewPositions.get(id);
       if (!state) continue;
       
-      const size = 24;
+      const identity = CREW_IDENTITIES[id];
+      const baked = bakedSprites.get(id);
+      const animState = crewAnimations.get(id) || { frame: 0, anim: "Idle" };
+      
       const x = state.x;
       const y = state.y;
       
-      // Glow effect
-      ctx.shadowColor = member.color;
-      ctx.shadowBlur = 12;
+      ctx.save();
+      ctx.translate(x, y);
       
-      // Body circle
-      ctx.fillStyle = member.color;
-      ctx.beginPath();
-      ctx.arc(x, y, size / 2, 0, Math.PI * 2);
-      ctx.fill();
+      // Flip for facing direction
+      if (state.facing === "left") {
+        ctx.scale(-1, 1);
+      }
       
-      // Reset shadow
-      ctx.shadowBlur = 0;
+      if (baked && spritesLoaded) {
+        // Draw baked sprite
+        ctx.drawImage(
+          baked.canvas,
+          animState.frame * SPRITE_SIZE, 0, SPRITE_SIZE, SPRITE_SIZE,
+          -SPRITE_SIZE / 2, -SPRITE_SIZE / 2, SPRITE_SIZE, SPRITE_SIZE
+        );
+      } else {
+        // Fallback: colored circle while sprites load
+        const color = identity.tints.Suit || "#888";
+        
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(identity.name[0], 0, 0);
+      }
       
-      // Border
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      
-      // Initial letter
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(member.name[0], x, y);
+      ctx.restore();
       
       // Name label below (in play mode)
       if (!editorMode) {
         ctx.font = "8px sans-serif";
-        ctx.fillStyle = member.color;
-        ctx.fillText(member.name, x, y + size / 2 + 10);
+        ctx.fillStyle = identity.tints.Suit || "#888";
+        ctx.textAlign = "center";
+        ctx.fillText(identity.name, x, y + SPRITE_SIZE / 2 + 4);
       }
     }
     
@@ -789,7 +937,7 @@ export default function StellkinPage() {
     ctx.textAlign = "right";
     ctx.fillText(`${Math.round(zoom * 100)}%`, canvas.width - 20, 30);
     
-  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions]);
+  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions, bakedSprites, spritesLoaded, crewAnimations]);
   
   // Room preview (Luma's quarter)
   useEffect(() => {
