@@ -577,6 +577,10 @@ export default function ShipPage() {
     let lastTime: number | null = null;
     let rafId: number;
     
+    // Animation time accumulator (time-based, not frame-based)
+    let animTime = 0;
+    const ANIM_FRAME_MS = 100; // Default animation frame duration
+    
     const gameLoop = (currentTime: number) => {
       // Initialize lastTime on first frame and skip processing
       // This prevents a large deltaTime on the second frame after React mount
@@ -786,8 +790,11 @@ export default function ShipPage() {
       // ==========================================================
       // ANIMATION & ROTATION (consolidated into rAF, no setIntervals)
       // ==========================================================
-      // Sprite animation (every ~6 frames = ~100ms at 60fps)
-      if (frameCount % 6 === 0 && sheetRef.current) {
+      // Sprite animation (time-based, works at any FPS)
+      animTime += deltaTime;
+      if (animTime >= ANIM_FRAME_MS && sheetRef.current) {
+        animTime -= ANIM_FRAME_MS; // Preserve remainder for smooth timing
+        
         const advanceFrame = (animRef: { current: string }, frameRef: { current: number }) => {
           const tag = sheetRef.current!.tags.find((t: any) => t.name === animRef.current);
           if (tag) {
