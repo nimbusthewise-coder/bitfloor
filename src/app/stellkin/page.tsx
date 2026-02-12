@@ -55,9 +55,16 @@ export default function StellkinPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Track spacebar for pan mode (Photoshop style)
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " " && !e.repeat) {
+        e.preventDefault();  // Prevent page scroll
+        setSpaceHeld(true);
+      }
       if (e.key.toLowerCase() === "e" && !e.repeat) {
         setEditorMode(prev => !prev);
       }
@@ -72,8 +79,18 @@ export default function StellkinPage() {
       if (e.key === "ArrowDown") setPanY(p => p - panSpeed);
     };
     
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        setSpaceHeld(false);
+      }
+    };
+    
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, [zoom]);
   
   // Mouse wheel zoom
@@ -129,13 +146,17 @@ export default function StellkinPage() {
   
   // Mouse handlers for drawing
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!editorMode) return;
-    
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      // Middle click or Alt+click = pan
+    // Spacebar + click = pan (works in any mode, like Photoshop)
+    if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+      // Middle click or Space+click = pan
       setIsPanning(true);
       setPanStart({ x: e.clientX - panX * zoom, y: e.clientY - panY * zoom });
-    } else if (e.button === 0) {
+      return;
+    }
+    
+    if (!editorMode) return;
+    
+    if (e.button === 0) {
       // Left click = place
       setIsDrawing(true);
       setDrawMode("place");
@@ -297,7 +318,7 @@ export default function StellkinPage() {
         onContextMenu={(e) => e.preventDefault()}
         style={{
           display: "block",
-          cursor: isPanning ? "grabbing" : editorMode ? "crosshair" : "default",
+          cursor: isPanning ? "grabbing" : spaceHeld ? "grab" : editorMode ? "crosshair" : "default",
           imageRendering: "pixelated",
         }}
       />
@@ -397,9 +418,9 @@ export default function StellkinPage() {
         textAlign: "center",
       }}>
         {editorMode ? (
-          <>Left-click: place | Right-click: erase | Scroll: zoom | Alt+drag: pan | E: toggle mode | G: grid</>
+          <>Left-click: place | Right-click: erase | Scroll: zoom | Space+drag: pan | E: toggle mode | G: grid</>
         ) : (
-          <>WASD: move | E: toggle editor</>
+          <>WASD: move | Space+drag: pan | E: toggle editor</>
         )}
       </div>
     </div>
