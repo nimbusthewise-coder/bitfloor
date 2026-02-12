@@ -1286,10 +1286,9 @@ export default function ShipPage() {
               nimPathProgressRef.current = nimJumpIndex + 1;
             } else if (nimPhys.grounded) {
               const isWalk = nimAction.action === "walk-left" || nimAction.action === "walk-right";
-              const isFall = nimAction.action === "fall-left" || nimAction.action === "fall-right";
               
-              if (isWalk || isFall) {
-                // MERGE consecutive walks/falls: find the LAST one in the same direction
+              if (isWalk) {
+                // MERGE consecutive walks: find the LAST walk in the same direction
                 let walkEndIndex = nimJumpIndex;
                 const walkDir = nimAction.action;
                 // Get the direction (left/right) from the action name
@@ -1297,12 +1296,11 @@ export default function ShipPage() {
                 
                 while (walkEndIndex + 1 < nimCurrentPathRef.current.length) {
                   const nextAction = nimCurrentPathRef.current[walkEndIndex + 1];
-                  // Merge walks and falls in the same direction
-                  const nextIsWalkOrFall = nextAction.action === "walk-left" || nextAction.action === "walk-right" ||
-                                           nextAction.action === "fall-left" || nextAction.action === "fall-right";
+                  // Only merge walks (not falls - falls need physics execution)
+                  const nextIsWalk = nextAction.action === "walk-left" || nextAction.action === "walk-right";
                   const nextDir = nextAction.action.endsWith("-left") ? "left" : "right";
                   
-                  if (nextIsWalkOrFall && nextDir === currentDir) {
+                  if (nextIsWalk && nextDir === currentDir) {
                     walkEndIndex++;
                   } else {
                     break;
