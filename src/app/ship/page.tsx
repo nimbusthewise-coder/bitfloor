@@ -997,8 +997,30 @@ export default function ShipPage() {
         const targetPixelY = targetY * TILE + TILE / 2;
         
         if (isMidJump && codexPhysics.grounded) {
-          // Just landed from a jump, advance to next action
-          codexPathProgressRef.current = currentJumpIndex + 1;
+          // For falls: if still grounded, keep walking to get off the edge
+          if (action.action === "fall-left" || action.action === "fall-right") {
+            const distToTarget = Math.abs(codexCenterX - targetPixelX) + Math.abs(codexCenterY - targetPixelY);
+            if (distToTarget < TILE * 0.5) {
+              // Reached target, advance
+              codexPathProgressRef.current = currentJumpIndex + 1;
+            } else {
+              // Keep walking to get off the edge
+              if (action.action === "fall-left") {
+                if (grav === "DOWN") input.left = true;
+                else if (grav === "UP") input.right = true;
+                else if (grav === "LEFT") input.up = true;
+                else if (grav === "RIGHT") input.down = true;
+              } else {
+                if (grav === "DOWN") input.right = true;
+                else if (grav === "UP") input.left = true;
+                else if (grav === "LEFT") input.down = true;
+                else if (grav === "RIGHT") input.up = true;
+              }
+            }
+          } else {
+            // Just landed from a jump, advance to next action
+            codexPathProgressRef.current = currentJumpIndex + 1;
+          }
         } else if (isWalking) {
           // Continue walking until we reach the target
           const distToTarget = Math.abs(codexCenterX - targetPixelX) + Math.abs(codexCenterY - targetPixelY);
@@ -1052,6 +1074,20 @@ export default function ShipPage() {
             else if (grav === "LEFT") input.down = true;
             else if (grav === "RIGHT") input.up = true;
             input.jump = true;
+            codexPathProgressRef.current = currentJumpIndex + 0.5;
+          } else if (action.action === "fall-left") {
+            // Walk off edge left, gravity does the rest (no jump)
+            if (grav === "DOWN") input.left = true;
+            else if (grav === "UP") input.right = true;
+            else if (grav === "LEFT") input.up = true;
+            else if (grav === "RIGHT") input.down = true;
+            codexPathProgressRef.current = currentJumpIndex + 0.5;
+          } else if (action.action === "fall-right") {
+            // Walk off edge right, gravity does the rest (no jump)
+            if (grav === "DOWN") input.right = true;
+            else if (grav === "UP") input.left = true;
+            else if (grav === "LEFT") input.down = true;
+            else if (grav === "RIGHT") input.up = true;
             codexPathProgressRef.current = currentJumpIndex + 0.5;
           } else {
             input.jump = true; // straight jump
