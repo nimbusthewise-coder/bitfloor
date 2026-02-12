@@ -105,12 +105,52 @@ Inspired by Star Trek, updated for our crew:
 
 ---
 
+## Rendering Layers (Depth System)
+
+Back to front render order for parallax depth:
+
+| Layer | Z-Order | Contents |
+|-------|---------|----------|
+| **STARFIELD** | 0 | Space we're flying through |
+| **BACKGROUND** | 1 | Back walls of rooms (the "rear" of the ship) |
+| **FARGROUND** | 2 | Wall furniture (beds, desks, mounted panels) |
+| **MIDGROUND** | 3 | Characters walking around |
+| **NEARGROUND** | 4 | Foreground elements, room dividers, rear-view windows |
+| **WINDOW** | 5 | UI layer, HUD, overlays |
+
+**Design notes:**
+- Characters walk "in" rooms, not "on" them
+- Furniture can be in front AND behind characters
+- Windows looking backward show where we came from
+- Some tiles may span multiple layers (window frame + glass)
+- Inspired by classic 2D parallax (Another World, Flashback)
+
+---
+
+## Spatial Design
+
+**Perspective:** Rear cutaway / side section view
+- Looking at ship from behind (or cross-section)
+- "Back wall" of each room faces forward (direction of travel)
+- Windows show space ahead (destination)
+- Like a dollhouse cross-section
+
+**Gravity:**
+- Default: DOWN (normal floors)
+- Multi-gravity rooms possible (Severance-style)
+- Floors can be on any wall (UP/DOWN/LEFT/RIGHT)
+- Central Command has floors on ALL 4 walls
+
+---
+
 ## Technical Notes
 
 - Built in Next.js (bitfloor repo)
 - HTML Canvas rendering
 - Frame-based pathfinding for AI characters
 - Physics system with multi-gravity support
+- 64x64 square tile grid
+- Tile size: 32px
 
 ---
 
