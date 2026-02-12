@@ -1318,20 +1318,18 @@ export default function ShipPage() {
                 const isOvershot = (walkDir === "walk-right" && lateralDelta < -TILE * 0.3) ||
                                    (walkDir === "walk-left" && lateralDelta > TILE * 0.3);
                 
-                if (Math.abs(lateralDelta) < TILE * 0.5 || isOvershot) {
+                if (Math.abs(lateralDelta) < TILE * 0.25 || isOvershot) {
                   // Reached or passed the end of the merged walk — skip all walked steps
                   // Zero velocity to prevent coasting/overshoot ping-pong
-                  const moveRight = getMoveRightVector(nimGrav);
-                  const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
-                  nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
-                  nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
+                  const moveRightForZero = getMoveRightVector(nimGrav);
+                  const lateralVel = nimPhysicsRef.current.vx * moveRightForZero.x + nimPhysicsRef.current.vy * moveRightForZero.y;
+                  nimPhysicsRef.current.vx -= moveRightForZero.x * lateralVel;
+                  nimPhysicsRef.current.vy -= moveRightForZero.y * lateralVel;
                   
-                  // Snap to target cell center if we're close enough
-                  if (Math.abs(lateralDelta) < TILE * 0.8) {
-                    const nimPhys = nimPhysicsRef.current;
-                    nimPhysicsRef.current.x = finalTargetX - nimPhys.width / 2;
-                    nimPhysicsRef.current.y = finalTargetY - nimPhys.height / 2;
-                  }
+                  // Snap to target cell center
+                  const nimPhys = nimPhysicsRef.current;
+                  nimPhysicsRef.current.x = finalTargetX - nimPhys.width / 2;
+                  nimPhysicsRef.current.y = finalTargetY - nimPhys.height / 2;
                   
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
