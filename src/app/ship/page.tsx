@@ -35,6 +35,21 @@ import {
   getJumpTrajectories,
   JumpResult,
 } from "@/lib/physics-pathfinding";
+import {
+  createExecutor,
+  stepExecutor,
+  isComplete,
+  ExecutorState,
+  ExecutorFrame,
+} from "@/lib/path-executor";
+import {
+  runPathfindingTest,
+  runAllTests,
+  formatTestResult,
+  TestResult,
+  lateralToInput,
+  runPinkNimTest,
+} from "@/lib/pathfinding-tests";
 
 // Character identities
 const nimbus: Identity = {
@@ -118,6 +133,39 @@ const VIEW_H = 12; // 384px visible
 
 // Room height: 4 tiles vertical space + 1 tile floor = 5 tiles
 const ROOM_H = 5;
+
+// World bounds in pixels
+const WORLD_WIDTH_PX = SHIP_W * TILE;
+const WORLD_HEIGHT_PX = SHIP_H * TILE;
+
+/**
+ * Clamp physics state to world bounds.
+ * This is the SINGLE POINT where boundary enforcement happens for direct position writes.
+ * Prevents characters from escaping the map when snapping positions.
+ */
+function clampPhysicsToBounds(physics: PhysicsState): void {
+  if (physics.x < 0) {
+    console.log(`[CLAMP] x was ${physics.x}, clamping to 0`);
+    physics.x = 0;
+    physics.vx = 0;
+  } else if (physics.x + physics.width > WORLD_WIDTH_PX) {
+    const maxX = WORLD_WIDTH_PX - physics.width;
+    console.log(`[CLAMP] x was ${physics.x}, clamping to ${maxX}`);
+    physics.x = maxX;
+    physics.vx = 0;
+  }
+
+  if (physics.y < 0) {
+    console.log(`[CLAMP] y was ${physics.y}, clamping to 0`);
+    physics.y = 0;
+    physics.vy = 0;
+  } else if (physics.y + physics.height > WORLD_HEIGHT_PX) {
+    const maxY = WORLD_HEIGHT_PX - physics.height;
+    console.log(`[CLAMP] y was ${physics.y}, clamping to ${maxY}`);
+    physics.y = maxY;
+    physics.vy = 0;
+  }
+}
 
 type CellType = keyof typeof COLORS;
 
@@ -399,6 +447,10 @@ export default function ShipPage() {
     lastCy: 0,
   });
   
+  // NEW: Frame-based executor (replays simulated trajectory directly)
+  const nimExecutorRef = useRef<ExecutorState | null>(null);
+  const nimUseExecutorRef = useRef<boolean>(true);  // Toggle between old/new system
+  
   // Nim baked sprites
   const [nimBaked, setNimBaked] = useState<BakedSprite | null>(null);
   
@@ -415,6 +467,15 @@ export default function ShipPage() {
     actual: string;
     passed: boolean | null;
   }[]>([]);
+  
+  // Pathfinding test results
+  const [testResults, setTestResults] = useState<TestResult[]>([]);
+  const [showTestPanel, setShowTestPanel] = useState(false);
+  
+  // Visual test mode - runs tests on the ACTUAL Nim character
+  const [visualTestMode, setVisualTestMode] = useState(false);
+  const visualTestQueueRef = useRef<{input: ScreenInput; framesLeft: number; action: string}[]>([]);
+  const visualTestIndexRef = useRef(0);
   
   // Sprite loading
   const [nimbusBaked, setNimbusBaked] = useState<BakedSprite | null>(null);
@@ -597,10 +658,47 @@ export default function ShipPage() {
         localCodexPhysics = newCodexState;
         codexPhysicsRef.current = newCodexState;
         
-        // --- Nim Physics (AI-driven when has destination) ---
-        const newNimState = updatePhysics(localNimPhysics, nimInputRef.current, shipGrid, SOLID_TILES);
-        localNimPhysics = newNimState;
-        nimPhysicsRef.current = newNimState;
+        // --- Nim Physics (AI-driven when has destination, or VISUAL TEST) ---
+        // Visual test mode overrides normal AI input
+        if (visualTestQueueRef.current.length > 0) {
+          const currentStep = visualTestQueueRef.current[0];
+          nimInputRef.current = currentStep.input;
+          currentStep.framesLeft--;
+          
+          // Move to next step when frames exhausted
+          if (currentStep.framesLeft <= 0) {
+            visualTestQueueRef.current.shift();
+            visualTestIndexRef.current++;
+            
+            // Check if test complete
+            if (visualTestQueueRef.current.length === 0) {
+              setVisualTestMode(false);
+              console.log("🎬 Visual test complete!");
+            }
+          }
+        }
+        
+        // NEW: Frame-based executor (when active, replay trajectory directly)
+        if (nimUseExecutorRef.current && nimExecutorRef.current && !isComplete(nimExecutorRef.current)) {
+          const frame = stepExecutor(nimExecutorRef.current);
+          if (frame) {
+            localNimPhysics = {
+              ...localNimPhysics,
+              x: frame.x,
+              y: frame.y,
+              vx: frame.vx,
+              vy: frame.vy,
+              gravity: frame.gravity,
+              grounded: frame.grounded,
+            };
+            nimPhysicsRef.current = localNimPhysics;
+          }
+        } else {
+          // Fall back to physics-based input movement
+          const newNimState = updatePhysics(localNimPhysics, nimInputRef.current, shipGrid, SOLID_TILES);
+          localNimPhysics = newNimState;
+          nimPhysicsRef.current = newNimState;
+        }
         
         accumulator -= FIXED_TIMESTEP;
         physicsSteps++;
@@ -1006,15 +1104,13 @@ export default function ShipPage() {
             } else {
               // Keep walking to get off the edge
               if (action.action === "fall-left") {
-                if (grav === "DOWN") input.left = true;
-                else if (grav === "UP") input.right = true;
-                else if (grav === "LEFT") input.up = true;
+                if (grav === "LEFT") input.up = true;
                 else if (grav === "RIGHT") input.down = true;
+                else input.left = true;
               } else {
-                if (grav === "DOWN") input.right = true;
-                else if (grav === "UP") input.left = true;
-                else if (grav === "LEFT") input.down = true;
+                if (grav === "LEFT") input.down = true;
                 else if (grav === "RIGHT") input.up = true;
+                else input.right = true;
               }
             }
           } else {
@@ -1029,65 +1125,51 @@ export default function ShipPage() {
             codexPathProgressRef.current = currentJumpIndex + 1;
           } else {
             // Continue walking in the same direction
+            // NOTE: Physics already does gravity-relative conversion, so don't double-invert!
+            // "walk-left" always means negative X in world space, "walk-right" means positive X
             if (action.action === "walk-left") {
-              if (grav === "DOWN") input.left = true;
-              else if (grav === "UP") input.right = true;
-              else if (grav === "LEFT") input.up = true;
-              else if (grav === "RIGHT") input.down = true;
+              input.left = true;
             } else if (action.action === "walk-right") {
-              if (grav === "DOWN") input.right = true;
-              else if (grav === "UP") input.left = true;
-              else if (grav === "LEFT") input.down = true;
-              else if (grav === "RIGHT") input.up = true;
+              input.right = true;
             }
           }
         } else if (!isMidJump && !isWalking && codexPhysics.grounded) {
           // Ready to execute next action
           
           // Handle walking actions
+          // NOTE: For DOWN/UP gravity, physics handles conversion. For LEFT/RIGHT (walls), we need screen mapping.
           if (action.action === "walk-left") {
-            if (grav === "DOWN") input.left = true;
-            else if (grav === "UP") input.right = true;
-            else if (grav === "LEFT") input.up = true;
+            if (grav === "LEFT") input.up = true;
             else if (grav === "RIGHT") input.down = true;
-            // Mark as walking (0.25 = walking state)
+            else input.left = true; // DOWN and UP both use screen-left for world-left
             codexPathProgressRef.current = currentJumpIndex + 0.25;
           } else if (action.action === "walk-right") {
-            if (grav === "DOWN") input.right = true;
-            else if (grav === "UP") input.left = true;
-            else if (grav === "LEFT") input.down = true;
+            if (grav === "LEFT") input.down = true;
             else if (grav === "RIGHT") input.up = true;
-            // Mark as walking
+            else input.right = true; // DOWN and UP both use screen-right for world-right
             codexPathProgressRef.current = currentJumpIndex + 0.25;
           } else if (action.action === "jump-left") {
-            // Gravity-left means different screen directions based on gravity
-            if (grav === "DOWN") input.left = true;
-            else if (grav === "UP") input.right = true;
-            else if (grav === "LEFT") input.up = true;
+            if (grav === "LEFT") input.up = true;
             else if (grav === "RIGHT") input.down = true;
+            else input.left = true;
             input.jump = true;
-            // Mark that we've initiated this jump (will advance when we land)
             codexPathProgressRef.current = currentJumpIndex + 0.5;
           } else if (action.action === "jump-right") {
-            if (grav === "DOWN") input.right = true;
-            else if (grav === "UP") input.left = true;
-            else if (grav === "LEFT") input.down = true;
+            if (grav === "LEFT") input.down = true;
             else if (grav === "RIGHT") input.up = true;
+            else input.right = true;
             input.jump = true;
             codexPathProgressRef.current = currentJumpIndex + 0.5;
           } else if (action.action === "fall-left") {
-            // Walk off edge left, gravity does the rest (no jump)
-            if (grav === "DOWN") input.left = true;
-            else if (grav === "UP") input.right = true;
-            else if (grav === "LEFT") input.up = true;
+            if (grav === "LEFT") input.up = true;
             else if (grav === "RIGHT") input.down = true;
+            else input.left = true;
             codexPathProgressRef.current = currentJumpIndex + 0.5;
           } else if (action.action === "fall-right") {
             // Walk off edge right, gravity does the rest (no jump)
-            if (grav === "DOWN") input.right = true;
-            else if (grav === "UP") input.left = true;
-            else if (grav === "LEFT") input.down = true;
+            if (grav === "LEFT") input.down = true;
             else if (grav === "RIGHT") input.up = true;
+            else input.right = true;
             codexPathProgressRef.current = currentJumpIndex + 0.5;
           } else {
             input.jump = true; // straight jump
@@ -1161,8 +1243,9 @@ export default function ShipPage() {
         }
       }
       
-      // Apply AI input
-      codexInputRef.current = input;
+      // Apply AI input (CODEX DISABLED - focusing on Nim pathfinding)
+      // codexInputRef.current = input;
+      codexInputRef.current = { up: false, down: false, left: false, right: false, jump: false };
       
       // === NIM AI: Follow player-clicked destination ===
       const nimPhys = nimPhysicsRef.current;
@@ -1172,6 +1255,27 @@ export default function ShipPage() {
       
       const dest = nimDestinationRef.current;
       if (dest) {
+        // NEW: Check if executor just completed
+        if (nimUseExecutorRef.current && nimExecutorRef.current && isComplete(nimExecutorRef.current)) {
+          const nimCenterX = nimPhys.x + nimPhys.width / 2;
+          const nimCenterY = nimPhys.y + nimPhys.height / 2;
+          const destCenterX = dest.x * TILE + TILE / 2;
+          const destCenterY = dest.y * TILE + TILE / 2;
+          const distToDest = Math.sqrt(Math.pow(destCenterX - nimCenterX, 2) + Math.pow(destCenterY - nimCenterY, 2));
+          
+          console.log(`[NimDBG] 🎬 EXECUTOR COMPLETE: dist to dest = ${distToDest.toFixed(1)}`);
+          
+          if (distToDest < TILE * 1.5) {
+            // Close enough - arrived!
+            console.log("[NimDBG] ✅ ARRIVED at destination!");
+            setNimDestination(null);
+            nimDestinationRef.current = null;
+            nimDestKeyRef.current = null;
+          }
+          // Clear executor so we can replan if needed
+          nimExecutorRef.current = null;
+        }
+        
         // Debug: log Nim AI state when PATHS is ON (throttled)
         nimDebugTickRef.current++;
         const nimDebug = showPathsRef.current && (nimDebugTickRef.current % 5 === 0);
@@ -1266,6 +1370,24 @@ export default function ShipPage() {
             nimCurrentPathRef.current = chosenCell.path;
             nimPathProgressRef.current = 0;
             nimPlanMetaRef.current = { destKey, bestKey: chosenKey, minDist, cost: bestCost };
+            
+            // NEW: Create frame-based executor for this path
+            if (nimUseExecutorRef.current) {
+              nimExecutorRef.current = createExecutor(chosenCell.path);
+              console.log(`[NimDBG] 🎬 EXECUTOR CREATED: ${nimExecutorRef.current.frames.length} frames`);
+            }
+            
+            // Enhanced path logging
+            console.log("[NimDBG] NEW PATH PLANNED:");
+            console.log(`  From tile: (${nimTileX}, ${nimTileY}) gravity=${nimPhys.gravity}`);
+            console.log(`  To dest: (${dest.x}, ${dest.y})`);
+            console.log(`  Path steps (${chosenCell.path.length}):`);
+            for (let i = 0; i < chosenCell.path.length; i++) {
+              const step = chosenCell.path[i];
+              const landX = step.landing?.x ?? "null";
+              const landY = step.landing?.y ?? "null";
+              console.log(`    [${i}] ${step.action}: start=(${step.start.x},${step.start.y},${step.start.gravity}) → landing=(${landX},${landY})`);
+            }
             if (nimDebug) console.log("[NimDBG] planned", { actions: chosenCell.path.length, minDist, cost: bestCost, bestKey: chosenKey });
           } else {
             if (nimDebug) console.log("[NimDBG] noPlan", { reachable: reachable.length, minDist });
@@ -1284,12 +1406,16 @@ export default function ShipPage() {
             setNimDestination(null);
             nimDestinationRef.current = null;
             nimDestKeyRef.current = null;
+            nimExecutorRef.current = null;  // Clear executor when arrived
           } else {
             // Move laterally (perpendicular to gravity) toward destination
+            // Physics handles gravity inversion via getMoveRightVector.
+            // Screen-left always means world-left (-X) regardless of gravity.
             if (grav === "DOWN" || grav === "UP") {
               if (dx > 2) nimInput.right = true;
               else if (dx < -2) nimInput.left = true;
             } else {
+              // LEFT/RIGHT gravity: use up/down for lateral movement
               if (dy > 2) nimInput.down = true;
               else if (dy < -2) nimInput.up = true;
             }
@@ -1297,7 +1423,9 @@ export default function ShipPage() {
         }
 
         // Execute current path — merge consecutive walks into smooth movement
-        if (nimCurrentPathRef.current.length > 0) {
+        // SKIP this old input-based executor if frame-based executor is active
+        const useFrameExecutor = nimUseExecutorRef.current && nimExecutorRef.current && !isComplete(nimExecutorRef.current);
+        if (!useFrameExecutor && nimCurrentPathRef.current.length > 0) {
           if (nimDebug) {
             const i = Math.floor(nimPathProgressRef.current);
             const a = nimCurrentPathRef.current[i];
@@ -1375,10 +1503,12 @@ export default function ShipPage() {
                 }
                 
                 if (distToTarget < TILE * 0.4) {
-                  // DEBUG: Log completion trigger
-                  if (nimDebug) {
-                    console.log(`[NimDBG] WALK COMPLETE: dist=${distToTarget.toFixed(1)}, merged=${nimJumpIndex}→${walkEndIndex}, advancing to ${walkEndIndex + 1}`);
-                  }
+                  // DEBUG: Log completion trigger with full details
+                  console.log(`[NimDBG] WALK SNAP: merged=${nimJumpIndex}→${walkEndIndex}`);
+                  console.log(`  finalAction: ${JSON.stringify({ action: finalAction.action, start: finalAction.start, landing: finalAction.landing })}`);
+                  console.log(`  finalTargetX=${finalTargetX}, finalTargetY=${finalTargetY} (TILE=${TILE})`);
+                  console.log(`  Current pos: (${nimCenterX.toFixed(1)}, ${nimCenterY.toFixed(1)})`);
+                  
                   // Reached or passed the end of the merged walk — skip all walked steps
                   // Zero velocity to prevent coasting/overshoot ping-pong
                   const moveRightForZero = getMoveRightVector(nimGrav);
@@ -1388,27 +1518,35 @@ export default function ShipPage() {
                   
                   // Snap to target cell center
                   const nimPhys = nimPhysicsRef.current;
-                  nimPhysicsRef.current.x = finalTargetX - nimPhys.width / 2;
-                  nimPhysicsRef.current.y = finalTargetY - nimPhys.height / 2;
+                  const newX = finalTargetX - nimPhys.width / 2;
+                  const newY = finalTargetY - nimPhys.height / 2;
+                  console.log(`  Snapping to: (${newX.toFixed(1)}, ${newY.toFixed(1)})`);
+                  nimPhysicsRef.current.x = newX;
+                  nimPhysicsRef.current.y = newY;
+                  // BOUNDARY FIX: Ensure position stays within world bounds
+                  clampPhysicsToBounds(nimPhysicsRef.current);
                   
                   nimPathProgressRef.current = walkEndIndex + 1;
                 } else {
                   // Keep walking/falling toward the final target.
-                  // Convert walk direction to screen input based on gravity
+                  // Convert walk direction to screen input based on gravity.
+                  // NOTE: currentDir ("left"/"right") is from action name = GRAVITY-RELATIVE!
+                  // For UP gravity: gravity-left (lateral<0) = world-right
                   const lateral = currentDir === "left" ? -1 : 1;
-                  if (nimGrav === "DOWN") {
-                    if (lateral < 0) nimInput.left = true;
-                    else nimInput.right = true;
-                  } else if (nimGrav === "UP") {
-                    // UP gravity inverts left/right
-                    if (lateral < 0) nimInput.right = true;
-                    else nimInput.left = true;
-                  } else if (nimGrav === "LEFT") {
+                  if (nimGrav === "LEFT") {
                     if (lateral < 0) nimInput.up = true;
                     else nimInput.down = true;
                   } else if (nimGrav === "RIGHT") {
                     if (lateral < 0) nimInput.down = true;
                     else nimInput.up = true;
+                  } else if (nimGrav === "UP") {
+                    // UP gravity: gravity-relative needs inversion for screen input
+                    if (lateral < 0) nimInput.right = true;  // gravity-left → screen-right
+                    else nimInput.left = true;               // gravity-right → screen-left
+                  } else {
+                    // DOWN gravity: direct mapping
+                    if (lateral < 0) nimInput.left = true;
+                    else nimInput.right = true;
                   }
 
                   // Stuck detection: if we're issuing walk but not moving, clear the plan so we can replan.
@@ -1428,6 +1566,8 @@ export default function ShipPage() {
                       nimPhysicsRef.current.y = finalTargetY - h / 2;
                       nimPhysicsRef.current.vx = 0;
                       nimPhysicsRef.current.vy = 0;
+                      // BOUNDARY FIX: Ensure position stays within world bounds
+                      clampPhysicsToBounds(nimPhysicsRef.current);
                       nimPathProgressRef.current = walkEndIndex + 1;
                     } else {
                       if (nimDebug) console.log(`[NimDBG] STUCK CLEAR: distToTarget=${distToTarget.toFixed(1)}, clearing path`);
@@ -1440,41 +1580,102 @@ export default function ShipPage() {
               } else if (nimAction.action.startsWith("jump") || nimAction.action.startsWith("fall")) {
                 // Reset walk stuck counter when we transition into a jump/fall
                 nimWalkStuckRef.current.count = 0;
-                // Zero out lateral velocity before jumping so arc matches simulation
-                // (simulation assumes zero starting lateral speed)
-                const moveRight = getMoveRightVector(nimGrav);
-                const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
-                nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
-                nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
-
-                // ANALOG EXECUTION: use the exact lateral axis value chosen by the planner.
-                // This makes the executed jump match the simulated yellow arc.
-                // (Value is gravity-relative: -1..+1 along moveRightVec.)
-                const lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
                 
-                // Convert lateral to screen input based on gravity
-                if (nimGrav === "DOWN") {
-                  if (lateral < 0) nimInput.left = true;
-                  else if (lateral > 0) nimInput.right = true;
-                } else if (nimGrav === "UP") {
-                  // UP gravity inverts left/right
-                  if (lateral < 0) nimInput.right = true;
-                  else if (lateral > 0) nimInput.left = true;
-                } else if (nimGrav === "LEFT") {
-                  if (lateral < 0) nimInput.up = true;
-                  else if (lateral > 0) nimInput.down = true;
-                } else if (nimGrav === "RIGHT") {
-                  if (lateral < 0) nimInput.down = true;
-                  else if (lateral > 0) nimInput.up = true;
-                }
-
-                // Jumps need jump button; falls just walk off edge (no jump impulse)
-                if (nimAction.action.startsWith("jump")) {
-                  nimInput.jump = true;
-                }
-                // For falls, lateral input alone will walk character off edge
+                // === WALK-TO-EDGE CHECK ===
+                // For falls (and jumps), the planner expects us to start at action.start (the edge cell).
+                // If we're not there yet, walk toward it first before executing the jump/fall.
+                const startX = nimAction.start.x * TILE + TILE / 2;
+                const startY = nimAction.start.y * TILE + TILE / 2;
+                const distToStart = Math.sqrt(
+                  Math.pow(startX - nimCenterX, 2) + 
+                  Math.pow(startY - nimCenterY, 2)
+                );
                 
-                nimPathProgressRef.current = nimJumpIndex + 0.5;
+                const isFall = nimAction.action.startsWith("fall");
+                const isAtEdge = distToStart < TILE * 0.6;
+                
+                if (nimDebug) {
+                  console.log(`[NimDBG] ${nimAction.action}: distToStart=${distToStart.toFixed(1)}, isAtEdge=${isAtEdge}, start=(${nimAction.start.x},${nimAction.start.y}), nim=(${Math.floor(nimCenterX/TILE)},${Math.floor(nimCenterY/TILE)})`);
+                }
+                
+                if (!isAtEdge) {
+                  // Not at start position yet - walk there first
+                  // Calculate lateral direction in world coordinates
+                  const dx = startX - nimCenterX;
+                  const walkDir = dx > 0 ? 1 : -1; // +1 = world-right, -1 = world-left
+                  
+                  // Convert to screen input based on gravity
+                  // IMPORTANT: Physics already handles gravity inversion via getMoveRightVector.
+                  // For DOWN gravity: moveRight = {x:+1}, so left input → negative lateral → -X (world-left)
+                  // For UP gravity: moveRight = {x:-1}, so left input → positive lateral → also -X (world-left)
+                  // The physics makes "screen-left always means world-left" regardless of gravity!
+                  // So we do NOT need to invert inputs here - just map directly.
+                  if (nimGrav === "DOWN" || nimGrav === "UP") {
+                    // Horizontal gravity: use left/right directly
+                    if (walkDir > 0) nimInput.right = true;
+                    else nimInput.left = true;
+                  } else if (nimGrav === "LEFT") {
+                    // LEFT gravity: lateral = vertical screen axis, down = +Y = world-right
+                    if (walkDir > 0) nimInput.down = true;
+                    else nimInput.up = true;
+                  } else { // RIGHT
+                    // RIGHT gravity: lateral = vertical screen axis, up = -Y = world-right
+                    if (walkDir > 0) nimInput.up = true;
+                    else nimInput.down = true;
+                  }
+                  
+                  if (nimDebug) {
+                    console.log(`[NimDBG] Walking to edge: dx=${dx.toFixed(1)}, walkDir=${walkDir}, grav=${nimGrav}`);
+                  }
+                  // Don't advance progress - still walking to start position
+                } else {
+                  // At start position - proceed with jump/fall execution
+                  
+                  // Zero out lateral velocity before jumping so arc matches simulation
+                  // (simulation assumes zero starting lateral speed)
+                  const moveRight = getMoveRightVector(nimGrav);
+                  const lateralVel = nimPhysicsRef.current.vx * moveRight.x + nimPhysicsRef.current.vy * moveRight.y;
+                  nimPhysicsRef.current.vx -= moveRight.x * lateralVel;
+                  nimPhysicsRef.current.vy -= moveRight.y * lateralVel;
+
+                  // ANALOG EXECUTION: use the exact lateral axis value chosen by the planner.
+                  // This makes the executed jump match the simulated yellow arc.
+                  // (Value is gravity-relative: -1..+1 along moveRightVec.)
+                  const lateral = typeof nimAction.lateral === "number" ? nimAction.lateral : 0;
+                  
+                  // Convert lateral to screen input based on gravity.
+                  // NOTE: 'lateral' is GRAVITY-RELATIVE (from planner simulation), not world coords!
+                  // For UP gravity: gravity-right (lateral>0) = world-left, so we need screen-left
+                  // to produce gravity-right intent via physics conversion chain.
+                  if (nimGrav === "LEFT") {
+                    if (lateral < 0) nimInput.up = true;
+                    else if (lateral > 0) nimInput.down = true;
+                  } else if (nimGrav === "RIGHT") {
+                    if (lateral < 0) nimInput.down = true;
+                    else if (lateral > 0) nimInput.up = true;
+                  } else if (nimGrav === "UP") {
+                    // UP gravity: lateral is gravity-relative, physics inverts screen input
+                    // gravity-right (lateral>0) needs screen-left to become gravity-right
+                    if (lateral < 0) nimInput.right = true;  // gravity-left → screen-right
+                    else if (lateral > 0) nimInput.left = true; // gravity-right → screen-left
+                  } else {
+                    // DOWN gravity: direct mapping (gravity-relative = screen-relative)
+                    if (lateral < 0) nimInput.left = true;
+                    else if (lateral > 0) nimInput.right = true;
+                  }
+
+                  // Jumps need jump button; falls just walk off edge (no jump impulse)
+                  if (nimAction.action.startsWith("jump")) {
+                    nimInput.jump = true;
+                  }
+                  // For falls, lateral input alone will walk character off edge
+                  
+                  if (nimDebug) {
+                    console.log(`[NimDBG] Executing ${nimAction.action}: lateral=${lateral}, jump=${nimInput.jump}`);
+                  }
+                  
+                  nimPathProgressRef.current = nimJumpIndex + 0.5;
+                }
               }
             }
           }
@@ -1482,6 +1683,10 @@ export default function ShipPage() {
       }
       
       // Always apply input (empty = stop moving)
+      // BUT skip if visual test mode is active (visual test controls Nim directly)
+      if (visualTestQueueRef.current.length > 0) {
+        return; // Visual test mode active - skip AI input
+      }
       if (dest && showPathsRef.current && (nimDebugTickRef.current % 5 === 0)) {
         console.log("[NimDBG] input", nimInput);
       }
@@ -2104,6 +2309,147 @@ export default function ShipPage() {
         >
           {nimDestination ? `Nim → (${nimDestination.x},${nimDestination.y})` : "Click to set Nim DEST"}
         </button>
+        <button
+          onClick={() => {
+            console.log("Running pathfinding tests...");
+            const results = runAllTests(shipGrid, SOLID_TILES);
+            setTestResults(results);
+            setShowTestPanel(true);
+            results.forEach(r => console.log(formatTestResult(r)));
+          }}
+          style={{
+            padding: "4px 8px",
+            background: testResults.length > 0 && testResults.every(r => r.success) ? "#0f0" : 
+                        testResults.length > 0 ? "#f00" : "#333",
+            color: testResults.length > 0 ? "#000" : "#ff0",
+            border: "1px solid #ff0",
+            cursor: "pointer",
+          }}
+        >
+          🧪 RUN TESTS
+        </button>
+        <button
+          onClick={() => {
+            console.log("=== LIVE TEST: Pink Nim → (9,9) ===");
+            
+            // 1. Reset Nim to spawn position
+            const spawnX = 12 * TILE;
+            const spawnY = 2 * TILE - PLAYER.COLLIDER_SIZE;
+            nimPhysicsRef.current = {
+              ...nimPhysicsRef.current,
+              x: spawnX,
+              y: spawnY,
+              vx: 0,
+              vy: 0,
+              gravity: "UP",
+              grounded: true,
+            };
+            console.log(`[LIVE TEST] Reset Nim to spawn: (${spawnX}, ${spawnY}) gravity=UP`);
+            
+            // 2. Clear any existing path and executor
+            nimCurrentPathRef.current = [];
+            nimPathProgressRef.current = 0;
+            nimDestKeyRef.current = null;
+            nimExecutorRef.current = null;  // Clear old executor
+            nimInputRef.current = { up: false, down: false, left: false, right: false, jump: false };
+            
+            // Ensure executor is enabled for this test
+            nimUseExecutorRef.current = true;
+            console.log("[LIVE TEST] 🎬 Frame-based executor ENABLED");
+            
+            // 3. Set destination to (9, 9)
+            const destX = 9;
+            const destY = 9;
+            nimDestinationRef.current = { x: destX, y: destY };
+            setNimDestination({ x: destX, y: destY });
+            console.log(`[LIVE TEST] Set destination: tile (${destX}, ${destY})`);
+            
+            // Also run the console test for comparison
+            console.log("\n--- Console simulation for reference: ---");
+            runPinkNimTest(shipGrid, SOLID_TILES);
+          }}
+          style={{
+            padding: "4px 8px",
+            background: "#333",
+            color: "#f0f",
+            border: "1px solid #f0f",
+            cursor: "pointer",
+          }}
+        >
+          🔬 NIM→9,9
+        </button>
+        <button
+          onClick={() => {
+            if (visualTestMode) {
+              // Stop current test
+              visualTestQueueRef.current = [];
+              setVisualTestMode(false);
+              nimInputRef.current = { up: false, down: false, left: false, right: false, jump: false };
+              return;
+            }
+            
+            // Run the last test (most complex) visually
+            const results = runAllTests(shipGrid, SOLID_TILES);
+            if (results.length === 0) return;
+            
+            // Use last test (ceiling to shaft is most interesting)
+            const testToRun = results[results.length - 1];
+            console.log("🎬 Starting visual test:", testToRun.testName);
+            
+            // Clear Nim's destination to disable AI pathfinding
+            setNimDestination(null);
+            nimCurrentPathRef.current = [];
+            
+            // Teleport Nim to start position
+            const TILE = 32;
+            const startX = testToRun.startTile.x * TILE + TILE / 2 - 14; // PLAYER.COLLIDER_SIZE/2
+            const startY = testToRun.startTile.y * TILE + TILE / 2 - 14;
+            nimPhysicsRef.current = {
+              ...nimPhysicsRef.current,
+              x: startX,
+              y: startY,
+              vx: 0,
+              vy: 0,
+              gravity: testToRun.startTile.gravity,
+              grounded: true,
+            };
+            
+            // Build input queue from planned path
+            const queue: {input: ScreenInput; framesLeft: number; action: string}[] = [];
+            
+            for (const step of testToRun.plannedPath) {
+              const isJump = step.action.startsWith("jump");
+              const isWalk = step.action.startsWith("walk");
+              const isFall = step.action.startsWith("fall");
+              
+              let lateral = step.lateral;
+              if (step.action.includes("-left")) lateral = -1;
+              else if (step.action.includes("-right")) lateral = 1;
+              
+              const input = lateralToInput(lateral, step.start.gravity, isJump);
+              
+              // Estimate frames needed
+              let frames = isWalk ? 30 : isJump ? 60 : isFall ? 45 : 30;
+              
+              queue.push({ input, framesLeft: frames, action: step.action });
+            }
+            
+            visualTestQueueRef.current = queue;
+            visualTestIndexRef.current = 0;
+            setVisualTestMode(true);
+            setTestResults(results);
+            setShowTestPanel(true);
+          }}
+          style={{
+            padding: "4px 8px",
+            background: visualTestMode ? "#f00" : "#333",
+            color: visualTestMode ? "#fff" : "#f90",
+            border: "1px solid #f90",
+            cursor: "pointer",
+          }}
+        >
+          {visualTestMode ? "⏹️ STOP" : "🎬 VISUAL"}
+        </button>
         <span style={{ color: "#666", alignSelf: "center" }}>
           WASD = move JP | Click = set Nim DEST | Space = jump
         </span>
@@ -2127,6 +2473,66 @@ export default function ShipPage() {
           fontSize: 10,
         }}>
           {gameMessage}
+        </div>
+      )}
+
+      {/* Test Results Panel */}
+      {showTestPanel && testResults.length > 0 && (
+        <div style={{
+          marginBottom: 10,
+          padding: "8px 12px",
+          background: "#1a1a2e",
+          border: "1px solid #ff0",
+          fontSize: 9,
+          maxHeight: 300,
+          overflow: "auto",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ color: "#ff0", fontWeight: "bold" }}>🧪 PATHFINDING TESTS</span>
+            <button onClick={() => setShowTestPanel(false)} style={{ background: "none", border: "none", color: "#666", cursor: "pointer" }}>✕</button>
+          </div>
+          {testResults.map((result, idx) => (
+            <div key={idx} style={{ marginBottom: 12, borderBottom: "1px solid #333", paddingBottom: 8 }}>
+              <div style={{ color: result.success ? "#0f0" : "#f00", fontWeight: "bold" }}>
+                {result.success ? "✅" : "❌"} {result.testName}
+              </div>
+              <div style={{ color: "#888", fontSize: 8 }}>
+                Start: ({result.startTile.x},{result.startTile.y}) {result.startTile.gravity} → Dest: ({result.destTile.x},{result.destTile.y})
+              </div>
+              {result.pathFound && (
+                <div style={{ color: "#666", fontSize: 8 }}>
+                  Path: [{result.plannedActions.join(" → ")}]
+                </div>
+              )}
+              {result.steps.map((step, stepIdx) => (
+                <div key={stepIdx} style={{ 
+                  marginLeft: 10, 
+                  padding: "2px 4px",
+                  background: step.passed ? "#0f01" : "#f001",
+                  marginTop: 2,
+                  fontSize: 8,
+                }}>
+                  <span style={{ color: step.passed ? "#0f0" : "#f00" }}>
+                    {step.passed ? "✓" : "✗"} Step {step.stepIndex}: {step.action}
+                  </span>
+                  <div style={{ color: "#888", marginLeft: 10 }}>
+                    Expected: ({step.expectedStart.x},{step.expectedStart.y}) <span style={{color:"#0af"}}>{step.expectedStart.gravity}</span> → ({step.expectedLanding?.x},{step.expectedLanding?.y}) <span style={{color:"#0af"}}>{step.expectedLanding?.gravity}</span>
+                  </div>
+                  <div style={{ color: "#888", marginLeft: 10 }}>
+                    Actual: ({step.actualStart.x},{step.actualStart.y}) <span style={{color:"#f80"}}>{step.actualStart.gravity}</span> → ({step.actualLanding?.x},{step.actualLanding?.y}) <span style={{color:"#f80"}}>{step.actualLanding?.gravity}</span>
+                  </div>
+                  {step.errorDetails.map((err, errIdx) => (
+                    <div key={errIdx} style={{ color: "#f00", marginLeft: 10, fontSize: 7 }}>
+                      ⚠️ {err}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <div style={{ color: "#888", marginTop: 4, fontSize: 8 }}>
+                Summary: {result.passedSteps}/{result.totalSteps} passed
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -2552,9 +2958,10 @@ export default function ShipPage() {
             ↑ Jump
           </button>
           
-          {/* Reset Position */}
+          {/* Reset Position (ALL characters) */}
           <button
             onClick={() => {
+              // Reset CODEX
               setCodexPhysics({
                 x: 13 * TILE,
                 y: 5 * TILE - PLAYER.COLLIDER_SIZE,
@@ -2567,10 +2974,38 @@ export default function ShipPage() {
                 jumpHeld: false,
               });
               setCodexPath([]);
+              
+              // Reset NIM (Pink Nim on ceiling)
+              setNimPhysics({
+                x: 12 * TILE,
+                y: 2 * TILE - PLAYER.COLLIDER_SIZE,
+                vx: 0,
+                vy: 0,
+                gravity: "UP",
+                grounded: true,
+                width: PLAYER.COLLIDER_SIZE,
+                height: PLAYER.COLLIDER_SIZE,
+                jumpHeld: false,
+              });
+              nimPhysicsRef.current = {
+                x: 12 * TILE,
+                y: 2 * TILE - PLAYER.COLLIDER_SIZE,
+                vx: 0,
+                vy: 0,
+                gravity: "UP",
+                grounded: true,
+                width: PLAYER.COLLIDER_SIZE,
+                height: PLAYER.COLLIDER_SIZE,
+                jumpHeld: false,
+              };
+              // Clear Nim's path
+              nimCurrentPathRef.current = [];
+              nimPathProgressRef.current = 0;
+              
               setCommandResults(prev => [...prev.slice(-9), {
                 name: "Reset",
-                expected: "Codex at spawn position",
-                actual: "Reset complete",
+                expected: "All characters at spawn positions",
+                actual: "Reset complete (Codex + Nim)",
                 passed: true,
               }]);
             }}

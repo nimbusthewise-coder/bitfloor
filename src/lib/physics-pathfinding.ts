@@ -5,7 +5,7 @@
  * Includes chained jumps, gravity changes, and closest-point fallback.
  */
 
-import { PHYSICS, PLAYER, getMoveRightVector, getGravityVector, GravityDirection } from "./physics";
+import { PHYSICS, PLAYER, getMoveRightVector, getGravityVector, GravityDirection, updatePhysics, PhysicsState, ScreenInput } from "./physics";
 
 // AABB helpers for walk viability checks (must match real collider footprint)
 const COLLIDER = PLAYER.COLLIDER_SIZE;
@@ -157,7 +157,8 @@ function getGravVec(gravity: PhysGravity): { x: number; y: number } {
   }
 }
 
-// Simulate one jump or fall with given lateral input
+// Simulate one jump or fall using the ACTUAL physics engine (updatePhysics)
+// This guarantees planner predictions match real game behavior exactly.
 // When isJump=false, simulates stepping off an edge and falling (no upward impulse)
 function simulateJump(
   startX: number,
@@ -170,54 +171,90 @@ function simulateJump(
   debug: boolean = false,
   isJump: boolean = true  // false = fall/drop off edge
 ): JumpResult | null {
-  const gravVec = getGravVec(gravity);
-  const jumpDir = { x: -gravVec.x, y: -gravVec.y };
-  const moveRightVec = getMoveRightVector(gravity);
   
-  let x = startX;
-  let y = startY;
-  // Jump: apply upward impulse; Fall: start with zero vertical velocity
-  let vx = isJump ? jumpDir.x * PHYSICS.JUMP_FORCE : 0;
-  let vy = isJump ? jumpDir.y * PHYSICS.JUMP_FORCE : 0;
+  // Convert center position to top-left (updatePhysics uses top-left coords)
+  const topLeftX = startX - COLLIDER / 2;
+  const topLeftY = startY - COLLIDER / 2;
   
-  // Note: No initial lateral velocity - matches actual physics
-  // Lateral velocity builds up through air control during jump
-  
-  if (debug) {
-    console.log(`  Jump start: (${startX.toFixed(1)}, ${startY.toFixed(1)}), grav=${gravity}, lateral=${lateralInput}`);
-    console.log(`  Initial vel: (${vx.toFixed(2)}, ${vy.toFixed(2)})`);
-  }
+  // Create physics state matching the actual game's PhysicsState
+  let state: PhysicsState = {
+    x: topLeftX,
+    y: topLeftY,
+    vx: 0,
+    vy: 0,
+    gravity: gravity as GravityDirection,
+    grounded: true,  // Start grounded (about to jump/fall)
+    width: COLLIDER,
+    height: COLLIDER,
+    jumpHeld: false,
+  };
   
   const trajectory: Array<{ x: number; y: number; frame: number }> = [];
   
-  for (let frame = 0; frame < maxFrames; frame++) {
-    // Apply gravity
-    vx += gravVec.x * PHYSICS.GRAVITY;
-    vy += gravVec.y * PHYSICS.GRAVITY;
+  // Input uses analog lateral for precise air control
+  const input: ScreenInput = {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+    jump: isJump,  // Only true for jumps, false for falls
+    lateral: lateralInput,
+  };
+  
+  // Debug logging for fall simulations - focus on specific test case (8,4) RIGHT
+  const startCell = pixelToCell(startX, startY);
+  const debugFalls = !isJump && gravity === "RIGHT" && startCell.x === 8 && (startCell.y === 4 || startCell.y === 5);
+  if (debugFalls) {
+    console.log(`[PLANNER-FALL-DEBUG] Starting from (${startCell.x},${startCell.y}) grav=${gravity} lateral=${lateralInput}`);
+    console.log(`  Pixel coords: (${startX.toFixed(1)}, ${startY.toFixed(1)}) → topLeft: (${(startX - COLLIDER/2).toFixed(1)}, ${(startY - COLLIDER/2).toFixed(1)})`);
+  }
+  
+  if (debug) {
+    console.log(`  simulateJump: start=(${startX.toFixed(1)}, ${startY.toFixed(1)}), grav=${gravity}, lateral=${lateralInput}, isJump=${isJump}`);
+  }
+  
+  // First frame: initiate jump or start falling
+  if (isJump) {
+    // Apply jump - updatePhysics will handle the jump impulse
+    state = updatePhysics(state, input, grid, solidTypes);
+  } else {
+    // For falls, we need to become airborne without jumping
+    // Set grounded=false to start falling
+    state.grounded = false;
+  }
+  
+  // Track center position for trajectory
+  let centerX = state.x + state.width / 2;
+  let centerY = state.y + state.height / 2;
+  trajectory.push({ x: centerX, y: centerY, frame: 0 });
+  
+  // Continue simulation with air control (no jump held)
+  const airInput: ScreenInput = {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+    jump: false,
+    lateral: lateralInput,
+  };
+  
+  let wasGrounded = false;
+  
+  for (let frame = 1; frame < maxFrames; frame++) {
+    state = updatePhysics(state, airInput, grid, solidTypes);
     
-    // Clamp fall speed
-    const fallSpeed = vx * gravVec.x + vy * gravVec.y;
-    if (fallSpeed > PHYSICS.MAX_FALL_SPEED) {
-      const excess = fallSpeed - PHYSICS.MAX_FALL_SPEED;
-      vx -= gravVec.x * excess;
-      vy -= gravVec.y * excess;
+    centerX = state.x + state.width / 2;
+    centerY = state.y + state.height / 2;
+    trajectory.push({ x: centerX, y: centerY, frame });
+    
+    // Debug first few frames for specific case
+    if (debugFalls && frame <= 10) {
+      const cellX = Math.floor(centerX / TILE);
+      const cellY = Math.floor(centerY / TILE);
+      console.log(`  Frame ${frame}: pos=(${centerX.toFixed(1)},${centerY.toFixed(1)}) cell=(${cellX},${cellY}) vel=(${state.vx.toFixed(2)},${state.vy.toFixed(2)}) grounded=${state.grounded} grav=${state.gravity}`);
     }
     
-    // Apply air control (matches actual physics - no speed multiplier)
-    const currentLateral = vx * moveRightVec.x + vy * moveRightVec.y;
-    const targetLateral = lateralInput * PHYSICS.AIR_MAX_SPEED;
-    const diff = targetLateral - currentLateral;
-    const change = Math.sign(diff) * Math.min(Math.abs(diff), PHYSICS.AIR_ACCEL);
-    vx += moveRightVec.x * change;
-    vy += moveRightVec.y * change;
-    
-    // Move
-    x += vx;
-    y += vy;
-    
-    trajectory.push({ x, y, frame });
-    
-    const cell = pixelToCell(x, y);
+    const cell = pixelToCell(centerX, centerY);
     
     // Check bounds
     if (cell.x < 0 || cell.x >= grid[0].length || cell.y < 0 || cell.y >= grid.length) {
@@ -225,52 +262,24 @@ function simulateJump(
       break;
     }
     
-    // Check collision using AABB (full hitbox, not just center point)
-    // This prevents planning arcs where the character body would clip through geometry
-    if (aabbOverlapsSolidAtCenter(x, y, grid, solidTypes)) {
-      // Hit something - check if we can land on it
-      const hitCell = { x: cell.x, y: cell.y };
+    // Did we land? (transition from airborne to grounded)
+    if (!wasGrounded && state.grounded) {
+      const landingCell = pixelToCell(centerX, centerY);
+      const newGravity = state.gravity as PhysGravity;
       
       if (debug) {
-        console.log(`  Frame ${frame}: HIT solid at (${hitCell.x}, ${hitCell.y}), vel=(${vx.toFixed(2)}, ${vy.toFixed(2)})`);
+        console.log(`  Frame ${frame}: LANDED at (${landingCell.x}, ${landingCell.y}), gravity=${newGravity}`);
       }
       
-      // Calculate which cell we were in before the collision
-      const prevX = x - vx;
-      const prevY = y - vy;
-      const prevCell = pixelToCell(prevX, prevY);
-      
-      // Determine gravity toward the surface we hit
-      // The new gravity points toward the solid we collided with
-      let newGravity: PhysGravity;
-      
-      // Check which face of the solid we hit based on our approach direction
-      const dx = hitCell.x - prevCell.x;
-      const dy = hitCell.y - prevCell.y;
-      
-      if (Math.abs(dx) > Math.abs(dy)) {
-        // Hit from the side
-        newGravity = dx > 0 ? "RIGHT" : "LEFT";
-      } else {
-        // Hit from above/below
-        newGravity = dy > 0 ? "DOWN" : "UP";
-      }
-      
-      if (debug) {
-        console.log(`  -> Hit from: dx=${dx}, dy=${dy}`);
-      }
-      
-      // The landing cell is the last empty cell before hitting the solid
-      const landingCell = prevCell;
-      
-      if (debug) {
-        console.log(`  -> New gravity: ${newGravity}, landing cell: (${landingCell.x}, ${landingCell.y})`);
-        console.log(`  -> Landing cell is ${isEmpty(grid, landingCell.x, landingCell.y, solidTypes) ? 'EMPTY' : 'SOLID'}`);
-      }
-      
-      // Check if landing position is valid
+      // Check if landing position is valid (not inside solid)
       if (isEmpty(grid, landingCell.x, landingCell.y, solidTypes)) {
         const startCell = pixelToCell(startX, startY);
+        
+        // Debug logging for falls
+        if (debugFalls) {
+          console.log(`[PLANNER-FALL] LANDED at (${landingCell.x},${landingCell.y}) grav=${newGravity} after ${frame} frames`);
+        }
+        
         return {
           start: { x: startCell.x, y: startCell.y, gravity },
           trajectory,
@@ -282,11 +291,13 @@ function simulateJump(
           cost: calculateJumpCellCost(trajectory)
         };
       }
-      break; // Invalid landing
+      break; // Invalid landing (inside solid)
     }
+    
+    wasGrounded = state.grounded;
   }
   
-  return null; // No landing found
+  return null; // No landing found within maxFrames
 }
 
 // Simple priority queue for Dijkstra's algorithm
@@ -363,6 +374,9 @@ export function calculateReachableCells(
       case "UP": return { left: { x: x + 1, y }, right: { x: x - 1, y } };
       case "LEFT": return { left: { x, y: y - 1 }, right: { x, y: y + 1 } };
       case "RIGHT": return { left: { x, y: y + 1 }, right: { x, y: y - 1 } };
+      default:
+        console.error(`[getLateralCells] Invalid gravity: "${gravity}" at (${x},${y})`);
+        return { left: { x: x - 1, y }, right: { x: x + 1, y } }; // Fallback to DOWN behavior
     }
   };
   
