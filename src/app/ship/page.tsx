@@ -65,7 +65,7 @@ const jp: Identity = {
   },
   faceTints: {
     skin: "#ffd5b5",
-    hair: "#4a3728",
+    hair: "#ffd5b5",    // Almost bald - matches skin
     background: "#ede9fe",
   },
   speed: 1,
