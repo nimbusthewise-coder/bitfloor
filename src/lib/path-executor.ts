@@ -34,7 +34,6 @@ export interface ExecutorState {
  * Convert a path (array of JumpResults) into a flat array of executor frames.
  * Each JumpResult contains a trajectory with frame-by-frame positions.
  */
-const TILE = 32;
 const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps
 
 export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
