@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { drawRoom, LUMA_QUARTER } from "@/lib/stellkin-room";
+import { drawRoom, LUMA_QUARTER, renderRoomCanvas } from "@/lib/stellkin-room";
 import {
   loadSpriteSheet,
   loadFaceSheet,
@@ -11,6 +11,14 @@ import {
   BakedSprite,
   Identity,
 } from "@/lib/sprites";
+import {
+  PhysicsState,
+  GravityDirection,
+  ScreenInput,
+  updatePhysics,
+  PHYSICS,
+  PLAYER,
+} from "@/lib/physics";
 
 // === STELLKIN SHIP EDITOR ===
 // A clean, focused ship builder for the Stellkin
@@ -319,12 +327,9 @@ const CREW_IDENTITIES: Record<string, Identity> = {
 const CREW_IDS = ["jp", "nimbus", "sol", "luma"] as const;
 
 // Character physics state
+// Character state wraps PhysicsState + visual state
 interface CharacterState {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  grounded: boolean;
+  physics: PhysicsState;
   facing: "left" | "right";
 }
 
@@ -333,41 +338,38 @@ function initCrewPositions(shipW: number, shipH: number): Map<string, CharacterS
   const centerX = shipW / 2 * TILE;
   const centerY = shipH / 2 * TILE;
   
+  const createPhysics = (x: number, y: number, gravity: GravityDirection = "DOWN"): PhysicsState => ({
+    x, y, vx: 0, vy: 0,
+    gravity,
+    grounded: false,
+    width: PLAYER.COLLIDER_SIZE,
+    height: PLAYER.COLLIDER_SIZE,
+    jumpHeld: false,
+  });
+  
   const positions = new Map<string, CharacterState>();
   
-  // JP spawns at center (player)
+  // JP spawns at center (player) - DOWN gravity
   positions.set("jp", {
-    x: centerX,
-    y: centerY + 5 * TILE,
-    vx: 0, vy: 0,
-    grounded: true,
+    physics: createPhysics(centerX, centerY + 5 * TILE, "DOWN"),
     facing: "right",
   });
   
-  // Nimbus spawns north (observatory area)
+  // Nimbus spawns north (observatory area) - UP gravity (ceiling walker!)
   positions.set("nimbus", {
-    x: centerX,
-    y: centerY - 15 * TILE,
-    vx: 0, vy: 0,
-    grounded: true,
+    physics: createPhysics(centerX, centerY - 15 * TILE, "UP"),
     facing: "left",
   });
   
-  // Sol spawns west (engineering)
+  // Sol spawns west (engineering) - LEFT gravity (wall walker!)
   positions.set("sol", {
-    x: centerX - 20 * TILE,
-    y: centerY,
-    vx: 0, vy: 0,
-    grounded: true,
+    physics: createPhysics(centerX - 20 * TILE, centerY, "LEFT"),
     facing: "right",
   });
   
-  // Luma spawns east (crew quarters)
+  // Luma spawns east (crew quarters) - RIGHT gravity (wall walker!)
   positions.set("luma", {
-    x: centerX + 20 * TILE,
-    y: centerY,
-    vx: 0, vy: 0,
-    grounded: true,
+    physics: createPhysics(centerX + 20 * TILE, centerY, "RIGHT"),
     facing: "left",
   });
   
@@ -408,9 +410,11 @@ export default function StellkinPage() {
   const [crewPositions, setCrewPositions] = useState<Map<string, CharacterState>>(
     () => initCrewPositions(DEFAULT_SHIP_W, DEFAULT_SHIP_H)
   );
+  const crewPositionsRef = useRef(crewPositions);
+  useEffect(() => { crewPositionsRef.current = crewPositions; }, [crewPositions]);
   
   // Player input state
-  const keysRef = useRef({ up: false, down: false, left: false, right: false });
+  const keysRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
   
   // Track which character is player-controlled
   const playerId = "jp";
@@ -487,51 +491,61 @@ export default function StellkinPage() {
       setFrameCount(f => f + 1);
       frameTickRef.current++;
       
-      // Update player position when not in editor mode
+      // Solid tiles for physics collision
+      const SOLID_TILES = ["hull", "hullLight", "floor", "console", "bed", "table"];
+      
+      // Update physics when not in editor mode
       if (!editorModeRef.current) {
-        const keys = keysRef.current;
-        const speed = 4; // pixels per frame
+        const input = keysRef.current;
         const g = gridRef.current;
         
-        // Inline collision check
-        const canWalk = (px: number, py: number): boolean => {
-          const tileX = Math.floor(px / TILE);
-          const tileY = Math.floor(py / TILE);
-          if (tileX < 0 || tileX >= g[0]?.length || tileY < 0 || tileY >= g.length) return false;
-          const t = g[tileY][tileX];
-          return t === "interior" || t === "door" || t === "floor";
-        };
+        // Skip if grid not ready
+        if (!g || !g.length || !g[0]) {
+          animFrameRef.current = requestAnimationFrame(animate);
+          return;
+        }
         
         setCrewPositions(prev => {
           const next = new Map(prev);
-          const jp = next.get(playerId);
-          if (jp) {
-            let dx = 0, dy = 0;
-            if (keys.left) dx -= speed;
-            if (keys.right) dx += speed;
-            if (keys.up) dy -= speed;
-            if (keys.down) dy += speed;
+          
+          // Update player (JP) with input
+          const jpState = next.get(playerId);
+          if (jpState) {
+            const newPhysics = updatePhysics(jpState.physics, input, g, SOLID_TILES);
             
-            isMoving = dx !== 0 || dy !== 0;
+            // Determine facing from horizontal velocity (gravity-relative)
+            let facing = jpState.facing;
+            const grav = newPhysics.gravity;
+            if (grav === "DOWN" || grav === "UP") {
+              if (newPhysics.vx < -0.5) facing = "left";
+              else if (newPhysics.vx > 0.5) facing = "right";
+            } else {
+              // LEFT/RIGHT gravity: vy is horizontal
+              if (newPhysics.vy < -0.5) facing = "left";
+              else if (newPhysics.vy > 0.5) facing = "right";
+            }
             
-            if (isMoving) {
-              // Check collision for new position
-              const newX = jp.x + dx;
-              const newY = jp.y + dy;
-              const canMoveX = canWalk(jp.x + dx, jp.y);
-              const canMoveY = canWalk(jp.x, jp.y + dy);
-              
-              next.set(playerId, {
-                ...jp,
-                x: canMoveX ? newX : jp.x,
-                y: canMoveY ? newY : jp.y,
-                facing: dx < 0 ? "left" : dx > 0 ? "right" : jp.facing,
+            isMoving = Math.abs(newPhysics.vx) > 0.5 || Math.abs(newPhysics.vy) > 0.5;
+            
+            next.set(playerId, {
+              physics: newPhysics,
+              facing,
+            });
+          }
+          
+          // Update NPCs with no input (just gravity)
+          const noInput: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
+          for (const id of CREW_IDS) {
+            if (id === playerId) continue;
+            const state = next.get(id);
+            if (state) {
+              next.set(id, {
+                ...state,
+                physics: updatePhysics(state.physics, noInput, g, SOLID_TILES),
               });
-              
-              // Update isMoving based on actual movement
-              isMoving = canMoveX || canMoveY;
             }
           }
+          
           return next;
         });
         
@@ -541,7 +555,12 @@ export default function StellkinPage() {
             const next = new Map(prev);
             for (const id of CREW_IDS) {
               const current = next.get(id) || { frame: 0, anim: "Idle" };
-              const anim = id === playerId && isMoving ? "Run" : "Idle";
+              const charState = crewPositionsRef.current?.get(id);
+              const isCharMoving = charState && (
+                Math.abs(charState.physics.vx) > 0.5 || 
+                Math.abs(charState.physics.vy) > 0.5
+              );
+              const anim = isCharMoving ? "Run" : "Idle";
               const maxFrames = anim === "Run" ? 8 : 4;
               next.set(id, {
                 anim,
@@ -589,24 +608,27 @@ export default function StellkinPage() {
       if (e.key === "ArrowUp") setPanY(p => p + panSpeed);
       if (e.key === "ArrowDown") setPanY(p => p - panSpeed);
       
-      // WASD for player movement (play mode only)
+      // WASD + Space for player movement (play mode only)
       const k = e.key.toLowerCase();
       if (k === "w") keysRef.current.up = true;
       if (k === "s") keysRef.current.down = true;
       if (k === "a") keysRef.current.left = true;
       if (k === "d") keysRef.current.right = true;
+      // Jump on W (gravity-relative up) or Shift
+      if (k === "w" || e.key === "Shift") keysRef.current.jump = true;
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") {
         setSpaceHeld(false);
       }
-      // WASD release
+      // WASD + jump release
       const k = e.key.toLowerCase();
-      if (k === "w") keysRef.current.up = false;
+      if (k === "w") { keysRef.current.up = false; keysRef.current.jump = false; }
       if (k === "s") keysRef.current.down = false;
       if (k === "a") keysRef.current.left = false;
       if (k === "d") keysRef.current.right = false;
+      if (e.key === "Shift") keysRef.current.jump = false;
     };
     
     window.addEventListener("keydown", handleKeyDown);
@@ -870,11 +892,22 @@ export default function StellkinPage() {
       const baked = bakedSprites.get(id);
       const animState = crewAnimations.get(id) || { frame: 0, anim: "Idle" };
       
-      const x = state.x;
-      const y = state.y;
+      const x = state.physics.x;
+      const y = state.physics.y;
+      const gravity = state.physics.gravity;
+      
+      // Calculate rotation based on gravity direction
+      const rotationMap: Record<GravityDirection, number> = {
+        DOWN: 0,
+        UP: 180,
+        LEFT: 90,
+        RIGHT: -90,
+      };
+      const rotation = rotationMap[gravity] * Math.PI / 180;
       
       ctx.save();
       ctx.translate(x, y);
+      ctx.rotate(rotation);
       
       // Flip for facing direction
       if (state.facing === "left") {
@@ -952,8 +985,8 @@ export default function StellkinPage() {
     
     // Calculate pan to center on player
     // Pan is the offset from center, so we need to move the view so JP is at center
-    const targetPanX = -(jp.x - (shipW * TILE) / 2);
-    const targetPanY = -(jp.y - (shipH * TILE) / 2);
+    const targetPanX = -(jp.physics.x - (shipW * TILE) / 2);
+    const targetPanY = -(jp.physics.y - (shipH * TILE) / 2);
     
     // Smooth camera movement
     setPanX(prev => prev + (targetPanX - prev) * 0.1);
