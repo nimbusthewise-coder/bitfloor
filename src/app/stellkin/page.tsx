@@ -16,9 +16,27 @@ import {
   GravityDirection,
   ScreenInput,
   updatePhysics,
+  getMoveRightVector,
   PHYSICS,
   PLAYER,
 } from "@/lib/physics";
+import {
+  precomputeMovements,
+  findPathBetweenPositions,
+  PathStep,
+  MovementMap,
+  GravityDir,
+} from "@/lib/pathfinding";
+import {
+  calculateReachableCells,
+  JumpResult,
+} from "@/lib/physics-pathfinding";
+import {
+  createExecutor,
+  stepExecutor,
+  isComplete,
+  ExecutorState,
+} from "@/lib/path-executor";
 
 // === STELLKIN SHIP EDITOR ===
 // A clean, focused ship builder for the Stellkin
@@ -349,31 +367,57 @@ function initCrewPositions(shipW: number, shipH: number): Map<string, CharacterS
   
   const positions = new Map<string, CharacterState>();
   
+  // centerX/Y are ALREADY in pixels (shipW/2 * TILE), don't multiply again!
+  // Hub extends ± hubSize (7 tiles) from center
+  // Spawn all in center, they'll fall to their respective floors
+  
   // JP spawns at center (player) - DOWN gravity
   positions.set("jp", {
-    physics: createPhysics(centerX, centerY + 5 * TILE, "DOWN"),
+    physics: createPhysics(centerX, centerY, "DOWN"),
     facing: "right",
   });
   
-  // Nimbus spawns north (observatory area) - UP gravity (ceiling walker!)
+  // Nimbus spawns at center - UP gravity (ceiling walker!)
   positions.set("nimbus", {
-    physics: createPhysics(centerX, centerY - 15 * TILE, "UP"),
+    physics: createPhysics(centerX + TILE, centerY, "UP"),
     facing: "left",
   });
   
-  // Sol spawns west (engineering) - LEFT gravity (wall walker!)
+  // Sol spawns at center - LEFT gravity (wall walker!)
   positions.set("sol", {
-    physics: createPhysics(centerX - 20 * TILE, centerY, "LEFT"),
+    physics: createPhysics(centerX, centerY + TILE, "LEFT"),
     facing: "right",
   });
   
-  // Luma spawns east (crew quarters) - RIGHT gravity (wall walker!)
+  // Luma spawns at center - RIGHT gravity (wall walker!)
   positions.set("luma", {
-    physics: createPhysics(centerX + 20 * TILE, centerY, "RIGHT"),
+    physics: createPhysics(centerX, centerY - TILE, "RIGHT"),
     facing: "left",
   });
   
   return positions;
+}
+
+// Sprite offset to align visual sprite with physics collider (from /ship)
+// Sprite is 48x48, collider is PLAYER.COLLIDER_SIZE (30x30)
+const SPRITE_SIZE = 48;
+function getSpriteOffset(gravity: GravityDirection): { x: number; y: number } {
+  const spriteW = SPRITE_SIZE, spriteH = SPRITE_SIZE;
+  const collW = PLAYER.COLLIDER_SIZE;
+  const collH = PLAYER.COLLIDER_SIZE;
+  const extraW = (spriteW - collW) / 2;  // 9px on each side
+  const extraH = spriteH - collH;         // 18px extra height
+
+  switch (gravity) {
+    case "DOWN":  // Feet at bottom - align sprite bottom with collision bottom
+      return { x: -extraW, y: -extraH };
+    case "UP":    // Feet at top - align sprite top with collision top
+      return { x: -extraW, y: 0 };
+    case "LEFT":  // Feet at left - align sprite left with collision left
+      return { x: 0, y: -extraW };
+    case "RIGHT": // Feet at right - align sprite right with collision right
+      return { x: -(spriteW - collW), y: -extraW };
+  }
 }
 
 export default function StellkinPage() {
@@ -420,8 +464,29 @@ export default function StellkinPage() {
   // Track which character is player-controlled
   const playerId = "jp";
   
+  // === NAVIGATION STATE ===
+  // Click-to-navigate: select character, then click destination
+  const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
+  const [destinations, setDestinations] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const destinationsRef = useRef(destinations);
+  useEffect(() => { destinationsRef.current = destinations; }, [destinations]);
+  
+  // Pathfinding state
+  const [movementMap, setMovementMap] = useState<MovementMap | null>(null);
+  const movementMapRef = useRef<MovementMap | null>(null);
+  useEffect(() => { movementMapRef.current = movementMap; }, [movementMap]);
+  
+  // Physics-based executors per NPC (like /ship)
+  // These replay pre-computed trajectories frame-by-frame
+  const executorsRef = useRef<Map<string, ExecutorState>>(new Map());
+  
+  // Store current paths for visualization
+  const [npcPaths, setNpcPaths] = useState<Map<string, JumpResult[]>>(new Map());
+  
   // === SPRITE STATE ===
   const [spriteSheet, setSpriteSheet] = useState<SpriteSheet | null>(null);
+  const spriteSheetRef = useRef<SpriteSheet | null>(null);
+  useEffect(() => { spriteSheetRef.current = spriteSheet; }, [spriteSheet]);
   const [faceSheet, setFaceSheet] = useState<FaceSheet | null>(null);
   const [bakedSprites, setBakedSprites] = useState<Map<string, BakedSprite>>(new Map());
   const [spritesLoaded, setSpritesLoaded] = useState(false);
@@ -480,94 +545,138 @@ export default function StellkinPage() {
     }));
   }, []);
   
+  // Precompute movement map for pathfinding when grid changes
+  const SOLID_TILES = ["hull", "hullLight", "floor", "console", "bed", "table"];
+  useEffect(() => {
+    console.log("🗺️ Computing movement map for pathfinding...");
+    const map = precomputeMovements(grid, SOLID_TILES);
+    setMovementMap(map);
+    console.log(`✅ Movement map ready (${map.size} valid positions)`);
+  }, [grid]);
+  
   // Animation loop for starfield + characters (continuous)
   // Time-based animation like /ship (10fps = 100ms per frame)
   const ANIM_FRAME_MS = 100;
+  const PHYSICS_TIMESTEP = 1000 / 60; // 60fps physics (16.67ms)
   
   useEffect(() => {
     let running = true;
     let isMoving = false;
     let lastTime = performance.now();
     let animTime = 0;
+    let physicsAccum = 0; // Accumulator for fixed timestep physics
     
     const animate = (currentTime: number) => {
       if (!running) return;
       
-      const deltaTime = currentTime - lastTime;
+      const deltaTime = Math.min(currentTime - lastTime, 100); // Cap to prevent spiral of death
       lastTime = currentTime;
       animTime += deltaTime;
+      physicsAccum += deltaTime;
       
       setFrameCount(f => f + 1);
       
-      // Solid tiles for physics collision
-      const SOLID_TILES = ["hull", "hullLight", "floor", "console", "bed", "table"];
+      // Update physics when not in editor mode (fixed timestep)
+      // Fixed timestep physics (like /ship)
+      // Use refs for physics updates, sync to React state once per render
+      const g = gridRef.current;
+      let physicsUpdated = false;
       
-      // Update physics when not in editor mode
-      if (!editorModeRef.current) {
-        // Build ScreenInput from Set (like /ship)
-        const keys = keysRef.current;
-        const input: ScreenInput = {
-          up: keys.has("w"),
-          down: keys.has("s"),
-          left: keys.has("a"),
-          right: keys.has("d"),
-          jump: keys.has(" "),  // Spacebar for jump!
-        };
-        const g = gridRef.current;
-        
-        // Skip if grid not ready
-        if (!g || !g.length || !g[0]) {
-          animFrameRef.current = requestAnimationFrame(animate);
-          return;
-        }
-        
-        setCrewPositions(prev => {
-          const next = new Map(prev);
+      if (g && g.length && g[0] && !editorModeRef.current) {
+        while (physicsAccum >= PHYSICS_TIMESTEP) {
+          physicsUpdated = true;
           
-          // Update player (JP) with input
-          const jpState = next.get(playerId);
+          // Build ScreenInput from Set (like /ship)
+          const keys = keysRef.current;
+          const input: ScreenInput = {
+            up: keys.has("w"),
+            down: keys.has("s"),
+            left: keys.has("a"),
+            right: keys.has("d"),
+            jump: keys.has(" "),
+          };
+          
+          // Get current state from ref (not React state)
+          const currentPositions = crewPositionsRef.current;
+          const nextPositions = new Map(currentPositions);
+          
+          // Update JP physics
+          const jpState = currentPositions.get(playerId);
           if (jpState) {
             const newPhysics = updatePhysics(jpState.physics, input, g, SOLID_TILES);
-            
-            // Determine facing from horizontal velocity (gravity-relative)
             let facing = jpState.facing;
-            const grav = newPhysics.gravity;
-            if (grav === "DOWN" || grav === "UP") {
-              if (newPhysics.vx < -0.5) facing = "left";
-              else if (newPhysics.vx > 0.5) facing = "right";
-            } else {
-              // LEFT/RIGHT gravity: vy is horizontal
-              if (newPhysics.vy < -0.5) facing = "left";
-              else if (newPhysics.vy > 0.5) facing = "right";
-            }
-            
+            const moveRightVec = getMoveRightVector(newPhysics.gravity);
+            const lateralVel = newPhysics.vx * moveRightVec.x + newPhysics.vy * moveRightVec.y;
+            if (lateralVel > 0.5) facing = "right";
+            else if (lateralVel < -0.5) facing = "left";
             isMoving = Math.abs(newPhysics.vx) > 0.5 || Math.abs(newPhysics.vy) > 0.5;
-            
-            next.set(playerId, {
-              physics: newPhysics,
-              facing,
-            });
+            nextPositions.set(playerId, { physics: newPhysics, facing });
           }
           
-          // Update NPCs with no input (just gravity)
-          const noInput: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
+          // Update NPCs - executor OR gravity
           for (const id of CREW_IDS) {
             if (id === playerId) continue;
-            const state = next.get(id);
-            if (state) {
-              next.set(id, {
-                ...state,
-                physics: updatePhysics(state.physics, noInput, g, SOLID_TILES),
-              });
+            const state = currentPositions.get(id);
+            if (!state) continue;
+            
+            const executor = executorsRef.current.get(id);
+            let newPhysics = state.physics;
+            let facing = state.facing;
+            
+            if (executor && !isComplete(executor)) {
+              // Step executor (1 frame per physics step)
+              const frame = stepExecutor(executor);
+              if (frame) {
+                newPhysics = {
+                  ...state.physics,
+                  x: frame.x,
+                  y: frame.y,
+                  vx: frame.vx,
+                  vy: frame.vy,
+                  gravity: frame.gravity,
+                  grounded: frame.grounded,
+                };
+                
+                const moveRightVec = getMoveRightVector(frame.gravity);
+                const lateralVel = frame.vx * moveRightVec.x + frame.vy * moveRightVec.y;
+                if (lateralVel > 0.5) facing = "right";
+                else if (lateralVel < -0.5) facing = "left";
+              }
+              
+              if (isComplete(executor)) {
+                console.log(`✅ ${id} reached destination`);
+                executorsRef.current.delete(id);
+                setDestinations(prev => { const n = new Map(prev); n.delete(id); return n; });
+                setNpcPaths(prev => { const n = new Map(prev); n.delete(id); return n; });
+              }
+            } else {
+              // No executor - apply gravity
+              const noInput: ScreenInput = { up: false, down: false, left: false, right: false, jump: false };
+              newPhysics = updatePhysics(state.physics, noInput, g, SOLID_TILES);
             }
+            
+            nextPositions.set(id, { physics: newPhysics, facing });
           }
           
-          return next;
-        });
+          // Update ref immediately (canvas reads from this)
+          crewPositionsRef.current = nextPositions;
+          
+          physicsAccum -= PHYSICS_TIMESTEP;
+        }
         
-        // Time-based animation (100ms per frame = 10fps, like /ship)
-        if (animTime >= ANIM_FRAME_MS) {
+        // Sync to React state once per render (for re-renders that need it)
+        if (physicsUpdated) {
+          setCrewPositions(crewPositionsRef.current);
+        }
+      }
+      
+      // Time-based animation (100ms per frame = 10fps, like /ship)
+      // NOTE: Outside the physics while loop - runs once per render frame
+      if (!editorModeRef.current && animTime >= ANIM_FRAME_MS) {
           animTime -= ANIM_FRAME_MS; // Preserve remainder for smooth timing
+          
+          // Get sprite sheet for tag info (may be null while loading)
+          const sheet = spriteSheetRef.current;
           
           setCrewAnimations(prev => {
             const next = new Map(prev);
@@ -580,17 +689,31 @@ export default function StellkinPage() {
               const isMoving = Math.abs(charState.physics.vx) > 0.3 || Math.abs(charState.physics.vy) > 0.3;
               const anim = !charState.physics.grounded ? "Jump" : isMoving ? "Run" : "Idle";
               
-              // Frame advancement (simple loop for now)
-              const maxFrames = anim === "Run" ? 8 : anim === "Jump" ? 4 : 4;
-              next.set(id, {
-                anim,
-                frame: (current.frame + 1) % maxFrames,
-              });
+              // Frame advancement using sprite sheet tags (like /ship)
+              let newFrame = current.frame;
+              if (sheet) {
+                const tag = sheet.tags.find(t => t.name === anim);
+                if (tag) {
+                  // If animation changed or frame out of range, reset to tag start
+                  if (anim !== current.anim || current.frame < tag.from || current.frame > tag.to) {
+                    newFrame = tag.from;
+                  } else {
+                    // Advance and wrap within tag range
+                    newFrame = current.frame + 1;
+                    if (newFrame > tag.to) newFrame = tag.from;
+                  }
+                }
+              } else {
+                // Fallback: simple frame loop
+                const maxFrames = anim === "Run" ? 8 : 4;
+                newFrame = (current.frame + 1) % maxFrames;
+              }
+              
+              next.set(id, { anim, frame: newFrame });
             }
             return next;
           });
         }
-      }
       
       animFrameRef.current = requestAnimationFrame(animate);
     };
@@ -661,7 +784,7 @@ export default function StellkinPage() {
     
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const zoomFactor = e.deltaY > 0 ? 0.97 : 1.03;  // Gentle zoom (3% per tick)
       setZoom(z => Math.min(Math.max(z * zoomFactor, 0.25), 4));
     };
     
@@ -669,8 +792,8 @@ export default function StellkinPage() {
     return () => canvas.removeEventListener("wheel", handleWheel);
   }, []);
   
-  // Convert screen coords to grid coords
-  const screenToGrid = useCallback((screenX: number, screenY: number) => {
+  // Convert screen coords to world pixel coords
+  const screenToWorld = useCallback((screenX: number, screenY: number): { x: number; y: number } | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     
@@ -684,14 +807,22 @@ export default function StellkinPage() {
     const worldX = (canvasX - centerX) / zoom - panX + (shipW * TILE) / 2;
     const worldY = (canvasY - centerY) / zoom - panY + (shipH * TILE) / 2;
     
-    const tileX = Math.floor(worldX / TILE);
-    const tileY = Math.floor(worldY / TILE);
+    return { x: worldX, y: worldY };
+  }, [zoom, panX, panY, shipW, shipH]);
+  
+  // Convert screen coords to grid coords
+  const screenToGrid = useCallback((screenX: number, screenY: number) => {
+    const world = screenToWorld(screenX, screenY);
+    if (!world) return null;
+    
+    const tileX = Math.floor(world.x / TILE);
+    const tileY = Math.floor(world.y / TILE);
     
     if (tileX >= 0 && tileX < shipW && tileY >= 0 && tileY < shipH) {
       return { x: tileX, y: tileY };
     }
     return null;
-  }, [zoom, panX, panY, shipW, shipH]);
+  }, [screenToWorld, shipW, shipH]);
   
   // Place or erase tile
   const modifyTile = useCallback((screenX: number, screenY: number, mode: "place" | "erase") => {
@@ -705,7 +836,21 @@ export default function StellkinPage() {
     });
   }, [screenToGrid, selectedTile]);
   
-  // Mouse handlers for drawing
+  // Check if a world position is inside a character's bounds
+  const getCharacterAtPosition = useCallback((worldX: number, worldY: number): string | null => {
+    for (const id of CREW_IDS) {
+      const state = crewPositionsRef.current.get(id);
+      if (!state) continue;
+      
+      const { x, y, width, height } = state.physics;
+      if (worldX >= x && worldX < x + width && worldY >= y && worldY < y + height) {
+        return id;
+      }
+    }
+    return null;
+  }, []);
+  
+  // Mouse handlers for drawing (editor) and navigation (play)
   const handleMouseDown = (e: React.MouseEvent) => {
     // Spacebar + click = pan (works in any mode, like Photoshop)
     if (e.button === 1 || (e.button === 0 && spaceHeld)) {
@@ -715,6 +860,98 @@ export default function StellkinPage() {
       return;
     }
     
+    // === PLAY MODE: Click-to-navigate ===
+    if (!editorMode && e.button === 0) {
+      const worldPos = screenToWorld(e.clientX, e.clientY);
+      if (!worldPos) return;
+      
+      // Check if clicking on a character
+      const clickedChar = getCharacterAtPosition(worldPos.x, worldPos.y);
+      
+      if (clickedChar) {
+        // Select/deselect character
+        setSelectedCharacter(prev => prev === clickedChar ? null : clickedChar);
+      } else if (selectedCharacter) {
+        // Set destination for selected character
+        const gridPos = screenToGrid(e.clientX, e.clientY);
+        if (gridPos) {
+          // Store destination
+          setDestinations(prev => {
+            const next = new Map(prev);
+            next.set(selectedCharacter, { x: gridPos.x * TILE, y: gridPos.y * TILE });
+            return next;
+          });
+          
+          // Compute physics-based path using calculateReachableCells (like /ship)
+          const charState = crewPositionsRef.current.get(selectedCharacter);
+          if (charState) {
+            const startTileX = Math.floor((charState.physics.x + PLAYER.COLLIDER_SIZE / 2) / TILE);
+            const startTileY = Math.floor((charState.physics.y + PLAYER.COLLIDER_SIZE / 2) / TILE);
+            const startGrav = charState.physics.gravity;
+            
+            // Get all reachable cells with their paths
+            const reachable = calculateReachableCells(
+              startTileX,
+              startTileY,
+              startGrav as any,
+              grid,
+              SOLID_TILES
+            );
+            
+            // Find the cell closest to our destination
+            let bestCell = null;
+            let minDist = Infinity;
+            for (const cell of reachable) {
+              const dist = Math.abs(cell.x - gridPos.x) + Math.abs(cell.y - gridPos.y);
+              if (dist < minDist) {
+                minDist = dist;
+                bestCell = cell;
+              }
+            }
+            
+            if (bestCell && bestCell.path.length > 0) {
+              console.log(`📍 Physics path found for ${selectedCharacter}: ${bestCell.path.length} jumps, dist=${minDist}`);
+              
+              // Create executor to replay the trajectory
+              const executor = createExecutor(bestCell.path);
+              executorsRef.current.set(selectedCharacter, executor);
+              
+              // Store for visualization
+              setNpcPaths(prev => {
+                const next = new Map(prev);
+                next.set(selectedCharacter, bestCell.path);
+                return next;
+              });
+            } else {
+              console.log(`❌ No physics path found for ${selectedCharacter} (${reachable.length} reachable cells)`);
+              executorsRef.current.delete(selectedCharacter);
+              setNpcPaths(prev => {
+                const next = new Map(prev);
+                next.delete(selectedCharacter);
+                return next;
+              });
+            }
+          }
+        }
+      }
+      return;
+    }
+    
+    // === PLAY MODE: Right-click to clear destination/selection ===
+    if (!editorMode && e.button === 2) {
+      if (selectedCharacter) {
+        // Clear destination for selected character
+        setDestinations(prev => {
+          const next = new Map(prev);
+          next.delete(selectedCharacter);
+          return next;
+        });
+        setSelectedCharacter(null);
+      }
+      return;
+    }
+    
+    // === EDITOR MODE ===
     if (!editorMode) return;
     
     if (e.button === 0) {
@@ -777,6 +1014,9 @@ export default function StellkinPage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     
+    // Pixel-perfect rendering
+    ctx.imageSmoothingEnabled = false;
+    
     // Clear
     ctx.fillStyle = "#0a0a0f";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -826,12 +1066,16 @@ export default function StellkinPage() {
       }
     }
     
-    // Transform for pan & zoom (centered)
+    // Transform for pan & zoom (centered, pixel-snapped)
+    // Calculate world origin in screen space and snap to integer pixels
+    const worldOriginX = canvas.width / 2 + (panX - (shipW * TILE) / 2) * zoom;
+    const worldOriginY = canvas.height / 2 + (panY - (shipH * TILE) / 2) * zoom;
+    const snappedOriginX = Math.round(worldOriginX);
+    const snappedOriginY = Math.round(worldOriginY);
+    
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(snappedOriginX, snappedOriginY);
     ctx.scale(zoom, zoom);
-    ctx.translate(panX, panY);
-    ctx.translate(-(shipW * TILE) / 2, -(shipH * TILE) / 2);
     
     // Draw tiles (skip space tiles to show starfield)
     for (let y = 0; y < shipH; y++) {
@@ -897,7 +1141,7 @@ export default function StellkinPage() {
     
     // === RENDER CREW ===
     // Draw each crew member with sprites (or fallback circles)
-    const SPRITE_SIZE = 48;
+    // Using same approach as /ship: offset sprite to align feet with collider
     
     for (const id of CREW_IDS) {
       const state = crewPositions.get(id);
@@ -906,11 +1150,14 @@ export default function StellkinPage() {
       const identity = CREW_IDENTITIES[id];
       const baked = bakedSprites.get(id);
       const animState = crewAnimations.get(id) || { frame: 0, anim: "Idle" };
-      
-      // Pixel-perfect positions (Math.round like /ship)
-      const x = Math.round(state.physics.x);
-      const y = Math.round(state.physics.y);
       const gravity = state.physics.gravity;
+      
+      // Calculate sprite offset to align feet with collider (like /ship)
+      const spriteOffset = getSpriteOffset(gravity);
+      
+      // Pixel-perfect positions with sprite offset applied
+      const screenX = Math.round(state.physics.x + spriteOffset.x);
+      const screenY = Math.round(state.physics.y + spriteOffset.y);
       
       // Calculate rotation based on gravity direction
       const rotationMap: Record<GravityDirection, number> = {
@@ -922,7 +1169,8 @@ export default function StellkinPage() {
       const rotation = rotationMap[gravity] * Math.PI / 180;
       
       ctx.save();
-      ctx.translate(x, y);
+      // Translate to sprite center (not physics position)
+      ctx.translate(screenX + SPRITE_SIZE / 2, screenY + SPRITE_SIZE / 2);
       ctx.rotate(rotation);
       
       // Flip for facing direction
@@ -931,7 +1179,7 @@ export default function StellkinPage() {
       }
       
       if (baked && spritesLoaded) {
-        // Draw baked sprite
+        // Draw baked sprite centered at origin
         ctx.drawImage(
           baked.canvas,
           animState.frame * SPRITE_SIZE, 0, SPRITE_SIZE, SPRITE_SIZE,
@@ -962,12 +1210,100 @@ export default function StellkinPage() {
       
       ctx.restore();
       
+      // Selection highlight
+      if (!editorMode && selectedCharacter === id) {
+        ctx.strokeStyle = identity.tints.Suit || "#fff";
+        ctx.lineWidth = 2 / zoom;
+        ctx.setLineDash([4 / zoom, 4 / zoom]);
+        ctx.strokeRect(
+          state.physics.x - 4,
+          state.physics.y - 4,
+          PLAYER.COLLIDER_SIZE + 8,
+          PLAYER.COLLIDER_SIZE + 8
+        );
+        ctx.setLineDash([]);
+      }
+      
       // Name label below (in play mode)
       if (!editorMode) {
         ctx.font = "8px sans-serif";
         ctx.fillStyle = identity.tints.Suit || "#888";
         ctx.textAlign = "center";
-        ctx.fillText(identity.name, x, y + SPRITE_SIZE / 2 + 4);
+        // Position label below sprite (using physics position for simplicity)
+        const labelX = state.physics.x + PLAYER.COLLIDER_SIZE / 2;
+        const labelY = state.physics.y + PLAYER.COLLIDER_SIZE + 10;
+        ctx.fillText(identity.name, labelX, labelY);
+      }
+    }
+    
+    // === RENDER DESTINATIONS ===
+    // Draw destination markers for characters with active destinations
+    if (!editorMode) {
+      for (const [charId, dest] of destinations) {
+        const identity = CREW_IDENTITIES[charId];
+        const color = identity?.tints.Suit || "#fff";
+        
+        // Draw X marker at destination
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2 / zoom;
+        ctx.beginPath();
+        // X shape
+        const size = 8;
+        ctx.moveTo(dest.x - size, dest.y - size);
+        ctx.lineTo(dest.x + size + PLAYER.COLLIDER_SIZE, dest.y + size + PLAYER.COLLIDER_SIZE);
+        ctx.moveTo(dest.x + size + PLAYER.COLLIDER_SIZE, dest.y - size);
+        ctx.lineTo(dest.x - size, dest.y + size + PLAYER.COLLIDER_SIZE);
+        ctx.stroke();
+        
+        // Pulsing circle
+        const pulse = Math.sin(frameCount * 0.1) * 0.3 + 0.7;
+        ctx.globalAlpha = pulse;
+        ctx.beginPath();
+        ctx.arc(
+          dest.x + PLAYER.COLLIDER_SIZE / 2,
+          dest.y + PLAYER.COLLIDER_SIZE / 2,
+          PLAYER.COLLIDER_SIZE * 0.8,
+          0,
+          Math.PI * 2
+        );
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        
+        // Draw physics-based path for this character (JumpResult trajectories)
+        const jumpPath = npcPaths.get(charId);
+        if (jumpPath && jumpPath.length > 0) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2 / zoom;
+          ctx.globalAlpha = 0.6;
+          
+          // Draw each jump/walk action's trajectory
+          for (const action of jumpPath) {
+            if (action.trajectory && action.trajectory.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(action.trajectory[0].x, action.trajectory[0].y);
+              for (let i = 1; i < action.trajectory.length; i++) {
+                ctx.lineTo(action.trajectory[i].x, action.trajectory[i].y);
+              }
+              ctx.stroke();
+            }
+            
+            // Draw landing point
+            if (action.landing) {
+              ctx.fillStyle = action.action.includes("jump") ? "#ff6b6b" : color;
+              ctx.beginPath();
+              ctx.arc(
+                action.landing.x * TILE + TILE / 2,
+                action.landing.y * TILE + TILE / 2,
+                4 / zoom,
+                0,
+                Math.PI * 2
+              );
+              ctx.fill();
+            }
+          }
+          
+          ctx.globalAlpha = 1;
+        }
       }
     }
     
@@ -985,12 +1321,9 @@ export default function StellkinPage() {
     ctx.textAlign = "left";
     ctx.fillText(editorMode ? "✏️ EDITOR MODE" : "🎮 PLAY MODE", 20, 30);
     
-    // Zoom indicator
-    ctx.fillStyle = "#888";
-    ctx.textAlign = "right";
-    ctx.fillText(`${Math.round(zoom * 100)}%`, canvas.width - 20, 30);
+    // Zoom indicator moved to DOM overlay
     
-  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions, bakedSprites, spritesLoaded, crewAnimations]);
+  }, [grid, zoom, panX, panY, shipW, shipH, showGrid, editorMode, frameCount, crewPositions, bakedSprites, spritesLoaded, crewAnimations, selectedCharacter, destinations, npcPaths]);
   
   // Camera follow - center view on player when in play mode
   useEffect(() => {
@@ -1089,6 +1422,61 @@ export default function StellkinPage() {
           imageRendering: "pixelated",
         }}
       />
+
+      {/* Zoom Controls */}
+      {(() => {
+        // Snap levels with labels
+        const snaps = [
+          { val: 0.25, label: "¼x" },
+          { val: 0.5, label: "½x" },
+          { val: 0.75, label: "¾x" },
+          { val: 1, label: "1x" },
+          { val: 1.5, label: "1.5x" },
+          { val: 2, label: "2x" },
+          { val: 3, label: "3x" },
+          { val: 4, label: "4x" },
+        ];
+        
+        // Find nearest snap that's different from current (with 5% tolerance)
+        const currentPct = Math.round(zoom * 100);
+        const nearestSnaps = snaps
+          .filter(s => Math.abs(s.val * 100 - currentPct) > 5)
+          .sort((a, b) => Math.abs(a.val - zoom) - Math.abs(b.val - zoom))
+          .slice(0, 2);  // Show up to 2 nearby snaps
+        
+        return (
+          <div style={{
+            position: "absolute",
+            right: 20,
+            top: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontFamily: "'Press Start 2P', monospace",
+          }}>
+            {nearestSnaps.map(snap => (
+              <button
+                key={snap.val}
+                onClick={() => setZoom(snap.val)}
+                style={{
+                  background: "rgba(10, 10, 20, 0.9)",
+                  border: "1px solid #555",
+                  color: "#00ffff",
+                  padding: "4px 8px",
+                  fontSize: 8,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {snap.label}
+              </button>
+            ))}
+            <span style={{ color: "#888", fontSize: 10, minWidth: 50, textAlign: "right" }}>
+              {currentPct}%
+            </span>
+          </div>
+        );
+      })()}
 
       {/* Luma's Quarter Preview */}
       <div

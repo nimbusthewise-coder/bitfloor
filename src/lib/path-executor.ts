@@ -34,9 +34,11 @@ export interface ExecutorState {
  * Convert a path (array of JumpResults) into a flat array of executor frames.
  * Each JumpResult contains a trajectory with frame-by-frame positions.
  */
-const WALK_FRAMES_PER_TILE = 15;  // ~0.25 seconds per tile at 60fps (walking)
-const RUN_FRAMES_PER_TILE = 6;    // ~0.1 seconds per tile at 60fps (running)
-const RUN_THRESHOLD_TILES = 1;    // Run when distance > 1 tile
+// Match player physics: GROUND_MAX_SPEED = 5 px/frame
+// 32 pixels / 5 px/frame = 6.4 frames per tile
+const WALK_FRAMES_PER_TILE = 10;  // Slower walking (~0.17 seconds per tile)
+const RUN_FRAMES_PER_TILE = 7;    // Match player max speed: 32px / 5px/frame ≈ 6.4 → round to 7
+const RUN_THRESHOLD_TILES = 3;    // Only run for longer distances
 
 export function pathToFrames(path: JumpResult[]): ExecutorFrame[] {
   const frames: ExecutorFrame[] = [];
