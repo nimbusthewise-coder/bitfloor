@@ -414,7 +414,8 @@ export default function StellkinPage() {
   useEffect(() => { crewPositionsRef.current = crewPositions; }, [crewPositions]);
   
   // Player input state
-  const keysRef = useRef<ScreenInput>({ up: false, down: false, left: false, right: false, jump: false });
+  // Input tracking - use Set like /ship for reliable key held detection
+  const keysRef = useRef(new Set<string>());
   
   // Track which character is player-controlled
   const playerId = "jp";
@@ -480,23 +481,38 @@ export default function StellkinPage() {
   }, []);
   
   // Animation loop for starfield + characters (continuous)
-  const frameTickRef = useRef(0);
+  // Time-based animation like /ship (10fps = 100ms per frame)
+  const ANIM_FRAME_MS = 100;
   
   useEffect(() => {
     let running = true;
     let isMoving = false;
+    let lastTime = performance.now();
+    let animTime = 0;
     
-    const animate = () => {
+    const animate = (currentTime: number) => {
       if (!running) return;
+      
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
+      animTime += deltaTime;
+      
       setFrameCount(f => f + 1);
-      frameTickRef.current++;
       
       // Solid tiles for physics collision
       const SOLID_TILES = ["hull", "hullLight", "floor", "console", "bed", "table"];
       
       // Update physics when not in editor mode
       if (!editorModeRef.current) {
-        const input = keysRef.current;
+        // Build ScreenInput from Set (like /ship)
+        const keys = keysRef.current;
+        const input: ScreenInput = {
+          up: keys.has("w"),
+          down: keys.has("s"),
+          left: keys.has("a"),
+          right: keys.has("d"),
+          jump: keys.has(" "),  // Spacebar for jump!
+        };
         const g = gridRef.current;
         
         // Skip if grid not ready
@@ -549,19 +565,23 @@ export default function StellkinPage() {
           return next;
         });
         
-        // Update animation frames (every 6 ticks = ~10fps animation)
-        if (frameTickRef.current % 6 === 0) {
+        // Time-based animation (100ms per frame = 10fps, like /ship)
+        if (animTime >= ANIM_FRAME_MS) {
+          animTime -= ANIM_FRAME_MS; // Preserve remainder for smooth timing
+          
           setCrewAnimations(prev => {
             const next = new Map(prev);
             for (const id of CREW_IDS) {
               const current = next.get(id) || { frame: 0, anim: "Idle" };
               const charState = crewPositionsRef.current?.get(id);
-              const isCharMoving = charState && (
-                Math.abs(charState.physics.vx) > 0.5 || 
-                Math.abs(charState.physics.vy) > 0.5
-              );
-              const anim = isCharMoving ? "Run" : "Idle";
-              const maxFrames = anim === "Run" ? 8 : 4;
+              if (!charState) continue;
+              
+              // Animation state like /ship: Jump > Run > Idle
+              const isMoving = Math.abs(charState.physics.vx) > 0.3 || Math.abs(charState.physics.vy) > 0.3;
+              const anim = !charState.physics.grounded ? "Jump" : isMoving ? "Run" : "Idle";
+              
+              // Frame advancement (simple loop for now)
+              const maxFrames = anim === "Run" ? 8 : anim === "Jump" ? 4 : 4;
               next.set(id, {
                 anim,
                 frame: (current.frame + 1) % maxFrames,
@@ -574,7 +594,7 @@ export default function StellkinPage() {
       
       animFrameRef.current = requestAnimationFrame(animate);
     };
-    animate();
+    animate(performance.now());
     
     return () => {
       running = false;
@@ -609,26 +629,21 @@ export default function StellkinPage() {
       if (e.key === "ArrowDown") setPanY(p => p - panSpeed);
       
       // WASD + Space for player movement (play mode only)
-      const k = e.key.toLowerCase();
-      if (k === "w") keysRef.current.up = true;
-      if (k === "s") keysRef.current.down = true;
-      if (k === "a") keysRef.current.left = true;
-      if (k === "d") keysRef.current.right = true;
-      // Jump on W (gravity-relative up) or Shift
-      if (k === "w" || e.key === "Shift") keysRef.current.jump = true;
+      // Add key to Set (like /ship pattern)
+      keysRef.current.add(e.key.toLowerCase());
+      
+      // Prevent spacebar from scrolling page (but allow for pan when spaceHeld)
+      if (e.key === " " && !spaceHeld) {
+        e.preventDefault();
+      }
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") {
         setSpaceHeld(false);
       }
-      // WASD + jump release
-      const k = e.key.toLowerCase();
-      if (k === "w") { keysRef.current.up = false; keysRef.current.jump = false; }
-      if (k === "s") keysRef.current.down = false;
-      if (k === "a") keysRef.current.left = false;
-      if (k === "d") keysRef.current.right = false;
-      if (e.key === "Shift") keysRef.current.jump = false;
+      // Remove key from Set
+      keysRef.current.delete(e.key.toLowerCase());
     };
     
     window.addEventListener("keydown", handleKeyDown);
@@ -892,8 +907,9 @@ export default function StellkinPage() {
       const baked = bakedSprites.get(id);
       const animState = crewAnimations.get(id) || { frame: 0, anim: "Idle" };
       
-      const x = state.physics.x;
-      const y = state.physics.y;
+      // Pixel-perfect positions (Math.round like /ship)
+      const x = Math.round(state.physics.x);
+      const y = Math.round(state.physics.y);
       const gravity = state.physics.gravity;
       
       // Calculate rotation based on gravity direction
@@ -1227,7 +1243,7 @@ export default function StellkinPage() {
         {editorMode ? (
           <>Left-click: place | Right-click: erase | Scroll: zoom | Space+drag: pan | E: toggle mode | G: grid</>
         ) : (
-          <>WASD: move | Space+drag: pan | C: camera follow | E: toggle editor</>
+          <>WASD: move | Space: jump | C: camera follow | E: toggle editor | Middle-drag: pan</>
         )}
       </div>
     </div>
